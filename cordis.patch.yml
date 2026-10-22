@@ -1,0 +1,12 @@
+# Bundle layer for @dr-co/dsh-skills.
+#
+# Installing the package mounts this row, so the plugin shows up in the
+# settings plugin list where it can be switched off or removed like any other.
+# The skills root is resolved at runtime — `$DSH_HOME/skills` unless the
+# profile's own patch overrides `skillsRoot` for this row's id, which is the
+# only host-specific knob there is.
+- insert:
+    - id: dsh-skills
+      name: '@dr-co/dsh-skills'
+      config:
+        maxUploadBytes: 8388608

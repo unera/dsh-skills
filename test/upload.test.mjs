@@ -1,6 +1,11 @@
 /**
  * The upload rules, one case per rule, including every refusal.
  *
+ * Two uploads, two contracts. The page's button creates a new skill and takes
+ * only an archive whose single top-level folder IS the skill name. A row's menu
+ * replaces that row's skill and takes a single `SKILL.md` (the row already says
+ * the name) or an archive of that same folder.
+ *
  * Each rejection also asserts that the tree is byte-identical afterwards: the
  * point of staging a swap is that a refused upload cannot leave a half-replaced
  * skill behind, and that is only worth believing if it is checked.
@@ -10,29 +15,58 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { applyUpload, classifyUpload, snapshotTree, UploadRejected } from '../lib/host/upload.js';
+import {
+  applyUpload,
+  classifyCreateUpload,
+  classifyReplaceUpload,
+  snapshotTree,
+  UploadRejected,
+} from '../lib/host/upload.js';
 import { buildZip } from '../lib/host/zip.js';
-import { scanSkills } from '../lib/host/scan.js';
+import { describeSkill, scanUserSkills } from '../lib/host/scan.js';
 import { dropRoot, makeRoot, writeSkill } from './helpers.mjs';
 
+const SKILLS = 'skills';
+
 /**
- * Run an upload that must be refused, and prove nothing moved.
- * @param root - skills root.
- * @param filename - uploaded name.
+ * Run a create upload that must be refused, and prove nothing moved.
+ * @param home - harness home.
  * @param bytes - uploaded bytes.
  * @param code - expected wire code.
  */
-function expectRefused(root, filename, bytes, code = 'unrecognized-format') {
-  const before = snapshotTree(root);
+function createRefused(home, bytes, code = 'unrecognized-format') {
+  const before = snapshotTree(home);
   assert.throws(
-    () => applyUpload(root, classifyUpload(root, filename, bytes)),
+    () => applyUpload(home, classifyCreateUpload(home, SKILLS, bytes)),
     (error) => {
       assert.ok(error instanceof UploadRejected, `expected UploadRejected, got ${error}`);
       assert.equal(error.code, code);
       return true;
     },
   );
-  assert.equal(snapshotTree(root), before, 'a refused upload must not change the tree');
+  assert.equal(snapshotTree(home), before, 'a refused upload must not change the tree');
+}
+
+/**
+ * Run a replace upload that must be refused, and prove nothing moved.
+ * @param home - harness home.
+ * @param dir - target skill directory, relative to the home.
+ * @param filename - uploaded name.
+ * @param bytes - uploaded bytes.
+ * @param code - expected wire code.
+ */
+function replaceRefused(home, dir, filename, bytes, code = 'unrecognized-format') {
+  const before = snapshotTree(home);
+  const target = describeSkill(home, dir);
+  assert.throws(
+    () => applyUpload(home, classifyReplaceUpload(dir, target.fileName, filename, bytes)),
+    (error) => {
+      assert.ok(error instanceof UploadRejected, `expected UploadRejected, got ${error}`);
+      assert.equal(error.code, code);
+      return true;
+    },
+  );
+  assert.equal(snapshotTree(home), before, 'a refused upload must not change the tree');
 }
 
 /**
@@ -63,211 +97,171 @@ function zipOf(members) {
   );
 }
 
-test('a single SKILL.md creates a new directory named by the frontmatter', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  const result = applyUpload(root, classifyUpload(root, 'SKILL.md', skillMd({ name: 'fresh-skill', body: '# Fresh' })));
-  assert.deepEqual(result, { action: 'created', dir: 'fresh-skill', fileName: 'SKILL.md' });
-  const [row] = scanSkills(root);
-  assert.equal(row.dir, 'fresh-skill');
-  assert.equal(row.status, 'active');
-  assert.match(readFileSync(join(root, 'fresh-skill', 'SKILL.md'), 'utf8'), /# Fresh/);
-});
-
-test('a single SKILL.md replaces the skill its frontmatter name matches, even under another directory', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'directory-name', { name: 'declared-name', body: '# Old\n' });
-  const result = applyUpload(
-    root,
-    classifyUpload(root, 'SKILL.md', skillMd({ name: 'declared-name', body: '# New body\n' })),
-  );
-  assert.deepEqual(result, { action: 'replaced', dir: 'directory-name', fileName: 'SKILL.md' });
-  assert.match(readFileSync(join(root, 'directory-name', 'SKILL.md'), 'utf8'), /# New body/);
-  assert.equal(existsSync(join(root, 'declared-name')), false);
-});
-
-test('a single SKILL.md also matches a skill by its directory name', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'by-dir', { name: 'something-else' });
-  const result = applyUpload(root, classifyUpload(root, 'SKILL.md', skillMd({ name: 'by-dir', body: '# Replaced\n' })));
-  assert.equal(result.dir, 'by-dir');
-  assert.match(readFileSync(join(root, 'by-dir', 'SKILL.md'), 'utf8'), /# Replaced/);
-});
-
-test('replacing a disabled skill keeps it disabled', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'paused', { file: '_SKILL.md' });
-  const result = applyUpload(root, classifyUpload(root, 'SKILL.md', skillMd({ name: 'paused', body: '# Edited\n' })));
-  assert.equal(result.fileName, '_SKILL.md');
-  assert.equal(existsSync(join(root, 'paused', 'SKILL.md')), false);
-  assert.match(readFileSync(join(root, 'paused', '_SKILL.md'), 'utf8'), /# Edited/);
-  assert.equal(scanSkills(root)[0].status, 'disabled');
-});
-
-test('a SKILL.md without a frontmatter name is refused with name-mismatch', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'existing');
-  expectRefused(root, 'SKILL.md', skillMd({}), 'name-mismatch');
-});
-
-test('a frontmatter name that is not a legal directory name is refused', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  for (const name of ['Not Kebab', '../escape', '.hidden', 'a/b', 'Upper', 'trailing-']) {
-    expectRefused(root, 'SKILL.md', skillMd({ name }), 'name-mismatch');
-  }
-});
-
-test('a single file that is not named SKILL.md is refused', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  expectRefused(root, 'notes.md', skillMd({ name: 'fine-name' }));
-  expectRefused(root, '', skillMd({ name: 'fine-name' }));
-});
-
-test('binary bytes are not mistaken for markdown', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  const bytes = Buffer.concat([Buffer.from('---\nname: ok\n---\n'), Buffer.from([0x00, 0x01, 0x02])]);
-  expectRefused(root, 'SKILL.md', bytes);
-});
-
-test('a ZIP of one installed folder replaces the whole directory', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'demo', { body: '# Old' });
-  mkdirSync(join(root, 'demo', 'old-attachment'));
-  writeFileSync(join(root, 'demo', 'old-attachment', 'gone.txt'), 'bye');
-
-  const archive = zipOf([
-    ['demo/', null],
-    ['demo/SKILL.md', '---\nname: demo\n---\n\n# New\n'],
-    ['demo/bin/tool.sh', '#!/bin/sh\n'],
-    ['demo/data/x.json', '{"a":1}'],
+/**
+ * A well-formed archive for one skill folder.
+ * @param folder - top-level folder name.
+ * @param body - the markdown body inside `SKILL.md`.
+ * @returns the archive bytes.
+ */
+function skillArchive(folder, body = '# Bundled\n') {
+  return zipOf([
+    [`${folder}/`, null],
+    [`${folder}/SKILL.md`, `---\nname: ${folder}\n---\n\n${body}`],
+    [`${folder}/bin/run.sh`, '#!/bin/sh\n'],
+    [`${folder}/data/x.json`, '{"a":1}'],
   ]);
-  const result = applyUpload(root, classifyUpload(root, 'demo.zip', archive));
-  assert.deepEqual(result, { action: 'replaced', dir: 'demo', fileName: 'SKILL.md' });
-  assert.match(readFileSync(join(root, 'demo', 'SKILL.md'), 'utf8'), /# New/);
-  assert.equal(readFileSync(join(root, 'demo', 'bin', 'tool.sh'), 'utf8'), '#!/bin/sh\n');
-  assert.equal(existsSync(join(root, 'demo', 'old-attachment')), false, 'the old content must be gone');
-  assert.deepEqual(
-    scanSkills(root).map((row) => row.dir),
-    ['demo'],
-  );
+}
+
+test('the page button creates a skill from a ZIP, folder name and all', (t) => {
+  const home = makeRoot();
+  t.after(() => dropRoot(home));
+  const result = applyUpload(home, classifyCreateUpload(home, SKILLS, skillArchive('zip-fresh')));
+  assert.deepEqual(result, { action: 'created', dir: 'skills/zip-fresh', fileName: 'SKILL.md' });
+  assert.match(readFileSync(join(home, 'skills/zip-fresh/SKILL.md'), 'utf8'), /# Bundled/);
+  assert.equal(readFileSync(join(home, 'skills/zip-fresh/bin/run.sh'), 'utf8'), '#!/bin/sh\n');
+  assert.equal(readFileSync(join(home, 'skills/zip-fresh/data/x.json'), 'utf8'), '{"a":1}');
+  assert.equal(scanUserSkills(home)[0].status, 'active');
 });
 
-test('a ZIP whose folder is not installed is refused', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'installed');
-  expectRefused(
-    root,
-    'other.zip',
+test('the page button refuses a single SKILL.md: a new skill comes from a folder', (t) => {
+  const home = makeRoot();
+  t.after(() => dropRoot(home));
+  createRefused(home, skillMd({ name: 'from-file' }));
+});
+
+test('the page button refuses a name that is taken, and the old tree is untouched', (t) => {
+  const home = makeRoot();
+  t.after(() => dropRoot(home));
+  const original = writeSkill(home, 'skills/taken', { body: '# The working one\n' });
+  createRefused(home, skillArchive('taken', '# Clobber\n'), 'already-exists');
+  assert.match(readFileSync(original, 'utf8'), /The working one/);
+});
+
+test('the page button refuses the usual bad shapes', (t) => {
+  const home = makeRoot();
+  t.after(() => dropRoot(home));
+  // Several top-level entries.
+  createRefused(
+    home,
     zipOf([
-      ['other/', null],
-      ['other/SKILL.md', '---\nname: other\n---\n'],
+      ['one/', null],
+      ['one/SKILL.md', '---\nname: one\n---'],
+      ['two/notes.md', 'stray'],
     ]),
   );
+  // SKILL.md at the archive root.
+  createRefused(home, zipOf([['SKILL.md', '---\nname: root\n---']]));
+  // No SKILL.md inside.
+  createRefused(home, zipOf([['x/', null], ['x/notes.md', '# nope']]));
+  // Illegal folder name.
+  createRefused(home, zipOf([['Bad Name/', null], ['Bad Name/SKILL.md', '---\nname: Bad Name\n---']]));
+  // Not an archive at all.
+  createRefused(home, Buffer.from('hello'));
+  // Empty body.
+  createRefused(home, Buffer.alloc(0));
+  assert.deepEqual(scanUserSkills(home), []);
 });
 
-test('a ZIP with several top-level entries is refused', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'demo');
-  expectRefused(
-    root,
+test('the row menu accepts a single SKILL.md and keeps the skill disabled', (t) => {
+  const home = makeRoot();
+  t.after(() => dropRoot(home));
+  writeSkill(home, 'skills/paused', { file: '_SKILL.md', body: '# Old\n' });
+  const target = describeSkill(home, 'skills/paused');
+  const result = applyUpload(
+    home,
+    classifyReplaceUpload(target.dir, target.fileName, 'SKILL.md', skillMd({ name: 'paused', body: '# New\n' })),
+  );
+  assert.deepEqual(result, { action: 'replaced', dir: 'skills/paused', fileName: '_SKILL.md' });
+  assert.match(readFileSync(join(home, 'skills/paused/_SKILL.md'), 'utf8'), /# New/);
+  assert.equal(existsSync(join(home, 'skills/paused/SKILL.md')), false);
+});
+
+test('the row menu replaces the whole folder from a ZIP named after it', (t) => {
+  const home = makeRoot();
+  t.after(() => dropRoot(home));
+  writeSkill(home, 'skills/demo', { body: '# Old' });
+  mkdirSync(join(home, 'skills', 'demo', 'old-attachment'));
+  writeFileSync(join(home, 'skills', 'demo', 'old-attachment', 'gone.txt'), 'bye');
+
+  const target = describeSkill(home, 'skills/demo');
+  const result = applyUpload(
+    home,
+    classifyReplaceUpload(target.dir, target.fileName, 'demo.zip', skillArchive('demo', '# New\n')),
+  );
+  assert.deepEqual(result, { action: 'replaced', dir: 'skills/demo', fileName: 'SKILL.md' });
+  assert.match(readFileSync(join(home, 'skills/demo/SKILL.md'), 'utf8'), /# New/);
+  assert.equal(existsSync(join(home, 'skills/demo/old-attachment')), false);
+});
+
+test('the row menu refuses an archive rooted at another name', (t) => {
+  const home = makeRoot();
+  t.after(() => dropRoot(home));
+  writeSkill(home, 'skills/demo');
+  replaceRefused(home, 'skills/demo', 'other.zip', skillArchive('other'));
+});
+
+test('the row menu refuses a file that is not named SKILL.md, and binary bytes', (t) => {
+  const home = makeRoot();
+  t.after(() => dropRoot(home));
+  writeSkill(home, 'skills/demo');
+  replaceRefused(home, 'skills/demo', 'notes.md', skillMd({ name: 'demo' }));
+  replaceRefused(
+    home,
+    'skills/demo',
+    'SKILL.md',
+    Buffer.concat([Buffer.from('---\nname: demo\n---\n'), Buffer.from([0x00, 0x01])]),
+  );
+});
+
+test('the row menu refuses the archive shapes that are not a single folder', (t) => {
+  const home = makeRoot();
+  t.after(() => dropRoot(home));
+  writeSkill(home, 'skills/demo');
+  // Two top-level entries.
+  replaceRefused(
+    home,
+    'skills/demo',
     'demo.zip',
     zipOf([
       ['demo/', null],
-      ['demo/SKILL.md', '---\nname: demo\n---\n'],
-      ['extra/notes.txt', 'stray'],
+      ['demo/SKILL.md', '---\nname: demo\n---'],
+      ['extra/notes.md', 'stray'],
     ]),
   );
-});
-
-test('a ZIP rooted at SKILL.md without a folder is refused', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'demo');
-  expectRefused(root, 'demo.zip', zipOf([['SKILL.md', '---\nname: demo\n---\n']]));
-});
-
-test('a ZIP with no SKILL.md inside is refused', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'demo');
-  expectRefused(
-    root,
+  // SKILL.md at the archive root.
+  replaceRefused(home, 'skills/demo', 'demo.zip', zipOf([['SKILL.md', '---\nname: demo\n---']]));
+  // No SKILL.md inside the folder.
+  replaceRefused(home, 'skills/demo', 'demo.zip', zipOf([['demo/', null], ['demo/notes.md', '# none']]));
+  replaceRefused(
+    home,
+    'skills/demo',
     'demo.zip',
     zipOf([
       ['demo/', null],
-      ['demo/notes.md', '# not a skill'],
-    ]),
-  );
-  expectRefused(
-    root,
-    'demo.zip',
-    zipOf([
-      ['demo/', null],
-      ['demo/_SKILL.md', '---\nname: demo\n---\n'],
-    ]),
-  );
-});
-
-test('a traversal member inside the right folder is refused', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'demo');
-  expectRefused(
-    root,
-    'demo.zip',
-    zipOf([
-      ['demo/', null],
-      ['demo/SKILL.md', '---\nname: demo\n---\n'],
+      ['demo/SKILL.md', '---\nname: demo\n---'],
       ['demo/../../escaped.txt', 'nope'],
     ]),
   );
-  assert.equal(existsSync(join(root, '..', 'escaped.txt')), false);
+  assert.equal(existsSync(join(home, '..', 'escaped.txt')), false);
 });
 
-test('an empty upload and an empty archive are refused', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  expectRefused(root, 'SKILL.md', Buffer.alloc(0));
-  expectRefused(root, 'demo.zip', zipOf([]));
-});
-
-test('a ZIP is judged by its bytes, not by its name', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'demo', { body: '# Old' });
-  const archive = zipOf([
-    ['demo/', null],
-    ['demo/SKILL.md', '---\nname: demo\n---\n\n# From bytes\n'],
-  ]);
-  // Named like a markdown file; still classified as an archive.
-  const result = applyUpload(root, classifyUpload(root, 'SKILL.md', archive));
+test('an archive without the explicit folder entry is still a valid folder', (t) => {
+  const home = makeRoot();
+  t.after(() => dropRoot(home));
+  writeSkill(home, 'skills/demo', { body: '# Old' });
+  const target = describeSkill(home, 'skills/demo');
+  const archive = zipOf([['demo/SKILL.md', '---\nname: demo\n---\n\n# No dir entry\n']]);
+  const result = applyUpload(home, classifyReplaceUpload(target.dir, target.fileName, 'demo.zip', archive));
   assert.equal(result.action, 'replaced');
-  assert.match(readFileSync(join(root, 'demo', 'SKILL.md'), 'utf8'), /# From bytes/);
+  assert.match(readFileSync(join(home, 'skills/demo/SKILL.md'), 'utf8'), /# No dir entry/);
 });
 
 test('a rejected upload leaves no staging directory behind', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'demo');
-  expectRefused(
-    root,
-    'demo.zip',
-    zipOf([
-      ['demo/', null],
-      ['demo/notes.md', '# no SKILL.md'],
-    ]),
-  );
-  const leftovers = snapshotTree(root)
+  const home = makeRoot();
+  t.after(() => dropRoot(home));
+  writeSkill(home, 'skills/demo');
+  replaceRefused(home, 'skills/demo', 'demo.zip', zipOf([['demo/', null], ['demo/notes.md', '# none']]));
+  const leftovers = snapshotTree(home)
     .split('\n')
     .filter((line) => line.includes('staging'));
   assert.deepEqual(leftovers, []);

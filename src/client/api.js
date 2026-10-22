@@ -72,21 +72,21 @@ export const api = {
 
   /**
    * Read one skill file.
-   * @param dir - skill directory name.
-   * @returns the file name, contents, and modification time.
+   * @param id - opaque row id from the list.
+   * @returns the file name, contents, modification time, and status.
    */
-  read(dir) {
-    return call(`/skill/${encodeURIComponent(dir)}`, { headers: { accept: 'application/json' } });
+  read(id) {
+    return call(`/skill/${encodeURIComponent(id)}`, { headers: { accept: 'application/json' } });
   },
 
   /**
    * Save one skill file.
-   * @param dir - skill directory name.
+   * @param id - opaque row id from the list.
    * @param content - new contents.
    * @returns the written file name and modification time.
    */
-  save(dir, content) {
-    return call(`/skill/${encodeURIComponent(dir)}`, {
+  save(id, content) {
+    return call(`/skill/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({ content }),
@@ -94,13 +94,45 @@ export const api = {
   },
 
   /**
+   * Enable or disable a skill by renaming its file on the host.
+   * @param id - opaque row id from the list.
+   * @param enable - true for `SKILL.md`, false for `_SKILL.md`.
+   * @returns the file name and status after the rename.
+   */
+  setEnabled(id, enable) {
+    return call(`/skill/${encodeURIComponent(id)}/${enable ? 'enable' : 'disable'}`, {
+      method: 'POST',
+      headers: { accept: 'application/json' },
+    });
+  },
+
+  /**
+   * Rename one skill's directory.
+   * @param id - opaque row id from the list.
+   * @param name - the new directory name, one kebab-case segment.
+   * @returns the new row id, path, and status.
+   */
+  rename(id, name) {
+    return call(`/skill/${encodeURIComponent(id)}/rename`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+  },
+
+  /**
    * Upload one file; the host decides the format from the bytes.
    * @param file - the picked File or Blob.
    * @param name - the file's name, used only for a single-file upload.
+   * @param mode - `create` for the page button (a new skill from a zip, never an
+   *   overwrite), `replace` for a row's menu item (that row's skill, never a
+   *   creation).
+   * @param id - the row id a replacement targets; ignored for a create.
    * @returns the applied action and directory.
    */
-  upload(file, name) {
-    return call('/upload', {
+  upload(file, name, mode = 'create', id = '') {
+    const query = mode === 'replace' ? `replace&id=${encodeURIComponent(id)}` : 'create';
+    return call(`/upload?mode=${query}`, {
       method: 'POST',
       headers: { 'content-type': 'application/octet-stream', [FILENAME_HEADER]: encodeURIComponent(name) },
       body: file,

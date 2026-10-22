@@ -1,21 +1,87 @@
 /**
- * The row action menu: a `⋯` button opening a dropdown of the four row actions.
+ * The per-row action control.
  *
- * It is deliberately not a modal and not a native `<details>`: the shell's own
- * tables use a popup anchored to the row, and the tests drive it through its
- * accessible names (`aria-haspopup`, `role="menu"`), which a details element
- * would not give them.
+ * Two shapes, one menu. On a wide screen a row with an editor gets a split
+ * control: the left half is the pencil that opens the editor — the action people
+ * reach for most — and the right half is a chevron that opens everything else.
+ * Where there is no editor (a packaged skill, or a narrow screen) there is a
+ * single `⋯` button; on a phone that is the same button as before, with Edit
+ * first in the menu.
+ *
+ * The split is built from two plain `<button>` elements in one bordered
+ * container: the harness' primitives package has no split-button or button-group
+ * component (only `Button`, a value `SegmentedControl`, and menu surfaces), and a
+ * composite of our own keeps the single visual control without bending a
+ * dependency whose shape does not fit.
  */
 import * as React from 'react';
 
 const h = React.createElement;
 
+/** Separator placeholder inside the item list. */
+export const SEPARATOR = Object.freeze({ separator: true });
+
 /**
- * One anchored dropdown.
- * @param props - see {@link ActionsMenu}.
- * @returns the button plus, while open, the menu.
+ * Pencil glyph for the split's primary half.
+ * @returns the inline SVG.
  */
-export function ActionsMenu({ label, items, moreLabel = 'More actions', disabled = false }) {
+function PencilIcon() {
+  return h(
+    'svg',
+    {
+      className: 'dshsk-icon',
+      'aria-hidden': 'true',
+      focusable: 'false',
+      width: 14,
+      height: 14,
+      viewBox: '0 0 16 16',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: 1.6,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+    },
+    h('path', { d: 'M11.1 2.4a1.6 1.6 0 0 1 2.3 2.3l-7.2 7.2-3 .8.8-3z' }),
+    h('path', { d: 'M10 3.5 12.3 5.8' }),
+  );
+}
+
+/**
+ * Chevron glyph for the split's menu half.
+ * @returns the inline SVG.
+ */
+function ChevronIcon() {
+  return h(
+    'svg',
+    {
+      className: 'dshsk-icon',
+      'aria-hidden': 'true',
+      focusable: 'false',
+      width: 12,
+      height: 12,
+      viewBox: '0 0 16 16',
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: 1.8,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+    },
+    h('path', { d: 'M4 6.5 8 10.5 12 6.5' }),
+  );
+}
+
+/**
+ * Render the row's action control.
+ * @param props.label - accessible name of the menu button.
+ * @param props.moreLabel - tooltip of the menu button.
+ * @param props.editLabel - accessible name of the split's primary half.
+ * @param props.items - menu entries, with {@link SEPARATOR} between groups.
+ * @param props.split - whether to render the pencil half.
+ * @param props.onEdit - invoked by the pencil half.
+ * @param props.disabled - locks both halves.
+ * @returns the control and, while open, the menu.
+ */
+export function RowActions({ label, moreLabel, editLabel, items, split = false, onEdit, disabled = false }) {
   const [open, setOpen] = React.useState(false);
   const container = React.useRef(null);
 
@@ -42,42 +108,61 @@ export function ActionsMenu({ label, items, moreLabel = 'More actions', disabled
     item.onSelect();
   };
 
+  const toggle = h(
+    'button',
+    {
+      type: 'button',
+      className: split ? 'dshsk-splitToggle' : 'dshsk-button dshsk-more',
+      'aria-haspopup': 'menu',
+      'aria-expanded': open ? 'true' : 'false',
+      'aria-label': label,
+      title: moreLabel,
+      disabled,
+      onClick: () => setOpen((value) => !value),
+    },
+    split ? h(ChevronIcon) : '⋯',
+  );
+
   return h(
     'div',
-    { className: 'dshsk-rowActions', ref: container },
-    h(
-      'button',
-      {
-        type: 'button',
-        className: 'dshsk-button dshsk-more',
-        'aria-haspopup': 'menu',
-        'aria-expanded': open ? 'true' : 'false',
-        'aria-label': label,
-        title: moreLabel,
-        disabled,
-        onClick: () => setOpen((value) => !value),
-      },
-      '⋯',
-    ),
+    { className: split ? 'dshsk-splitActions' : 'dshsk-rowActions', ref: container },
+    split
+      ? h(
+          'button',
+          {
+            type: 'button',
+            className: 'dshsk-splitPrimary',
+            'aria-label': editLabel,
+            title: editLabel,
+            disabled,
+            onClick: () => onEdit(),
+          },
+          h(PencilIcon),
+        )
+      : null,
+    toggle,
     open
       ? h(
           'div',
           { className: 'dshsk-menu', role: 'menu', 'aria-label': label },
-          items.map((item) =>
-            h(
-              'button',
-              {
-                key: item.id,
-                type: 'button',
-                role: 'menuitem',
-                onClick: () => choose(item),
-              },
-              item.label,
-            ),
+          items.map((item, index) =>
+            item === SEPARATOR || item.separator === true
+              ? h('div', { key: `sep-${index}`, className: 'dshsk-menuSeparator', role: 'separator' })
+              : h(
+                  'button',
+                  {
+                    key: item.id,
+                    type: 'button',
+                    role: 'menuitem',
+                    title: item.hint,
+                    onClick: () => choose(item),
+                  },
+                  item.label,
+                ),
           ),
         )
       : null,
   );
 }
 
-export default ActionsMenu;
+export default RowActions;

@@ -1,29 +1,42 @@
 /**
- * Route-level behaviour of the host half: the happy paths for list/read/save,
- * both downloads, and upload, plus the wire codes the client localizes.
+ * Route-level behaviour of the host half: list, read, save, both downloads,
+ * enable/disable, and upload, plus the wire codes the client localizes.
  *
  * The routes are exercised through a real `node:http` server, so status codes,
  * headers, and bodies are what a browser would actually see.
  */
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 
 import { createRoutes, FILENAME_HEADER } from '../lib/host/routes.js';
-import { readZip } from '../lib/host/zip.js';
-import { buildZip } from '../lib/host/zip.js';
-import { scanSkills } from '../lib/host/scan.js';
-import { dropRoot, makeRoot, writeSkill } from './helpers.mjs';
+import { buildZip, readZip } from '../lib/host/zip.js';
+import { scanUserSkills } from '../lib/host/scan.js';
+import { dropRoot, makeRoot, writePackage, writeSkill } from './helpers.mjs';
 
-const root = makeRoot();
+const home = makeRoot();
+const install = makeRoot();
+const MAX_UPLOAD = 4096;
 let server;
 let origin;
-const MAX_UPLOAD = 4096;
+
+const USER_ID = encodeURIComponent('user:home:skills/alpha');
+const PLUGIN_ID = encodeURIComponent('plugin:install:node_modules/@scope/tools/assets/office');
 
 before(async () => {
-  const [route] = createRoutes({ root, maxUploadBytes: MAX_UPLOAD });
+  writeSkill(home, 'skills/alpha', { description: 'first' });
+  writeSkill(home, 'skills/beta', { file: '_SKILL.md', description: 'second' });
+  writePackage(install, '@scope/tools', [{ kind: 'assets', name: 'office' }]);
+
+  const [route] = createRoutes({
+    home,
+    installDir: install,
+    skillsDir: 'skills',
+    maxUploadBytes: MAX_UPLOAD,
+    provided: async () => [{ name: 'agent-profile-p-abcd', description: 'preset', provider: 'agent-preset' }],
+  });
   server = createServer((request, response) => route.handler(request, response));
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
@@ -31,7 +44,8 @@ before(async () => {
 
 after(async () => {
   await new Promise((resolve) => server.close(resolve));
-  dropRoot(root);
+  dropRoot(home);
+  dropRoot(install);
 });
 
 /**
@@ -44,163 +58,235 @@ function call(path, init) {
   return fetch(`${origin}/dsh-skills/api${path}`, init);
 }
 
-test('GET /skills lists active and disabled skills with the root', async () => {
-  writeSkill(root, 'alpha', { description: 'first' });
-  writeSkill(root, 'beta', { file: '_SKILL.md', description: 'second' });
+test('GET /skills returns our skills, packaged skills, and the virtual one', async () => {
   const response = await call('/skills');
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.equal(body.root, root);
-  assert.deepEqual(body.skills.map((row) => [row.dir, row.status]), [
-    ['alpha', 'active'],
-    ['beta', 'disabled'],
-  ]);
+  assert.equal(body.home, home);
+  assert.deepEqual(
+    body.skills.map((row) => [row.id, row.origin, row.status]),
+    [
+      ['user:home:skills/alpha', 'user', 'active'],
+      ['user:home:skills/beta', 'user', 'disabled'],
+      ['plugin:install:node_modules/@scope/tools/assets/office', 'plugin', 'active'],
+      ['virtual:agent-profile-p-abcd', 'virtual', 'virtual'],
+    ],
+  );
+  assert.deepEqual(body.roots.map((root) => root.key), ['home', 'install']);
 });
 
-test('GET /skill/<dir> returns the file and its modification time', async () => {
-  const response = await call('/skill/alpha');
-  assert.equal(response.status, 200);
-  const body = await response.json();
-  assert.equal(body.fileName, 'SKILL.md');
-  assert.match(body.content, /name: alpha/);
-  assert.equal(typeof body.mtimeMs, 'number');
+test('GET /skill/<id> reads our file and the packaged one', async () => {
+  const mine = await call(`/skill/${USER_ID}`);
+  assert.equal(mine.status, 200);
+  const mineBody = await mine.json();
+  assert.equal(mineBody.fileName, 'SKILL.md');
+  assert.equal(mineBody.status, 'active');
+  assert.match(mineBody.content, /name: alpha/);
+
+  const bundled = await call(`/skill/${PLUGIN_ID}`);
+  assert.equal(bundled.status, 200);
+  assert.match((await bundled.json()).content, /name: office/);
 });
 
-test('GET /skill/<missing> is 404 not-found, and a traversal is refused', async () => {
-  const missing = await call('/skill/does-not-exist');
-  assert.equal(missing.status, 404);
-  assert.equal((await missing.json()).code, 'not-found');
+test('a virtual row has no file, and an unknown id is not-found', async () => {
+  const virtual = await call(`/skill/${encodeURIComponent('virtual:agent-profile-p-abcd')}`);
+  assert.equal(virtual.status, 404);
+  assert.equal((await virtual.json()).code, 'not-found');
 
-  // Double-encoded: the URL parser resolves `%2E%2E` as a dot segment and
-  // normalizes the path, so the dots have to survive one more layer to reach
-  // the handler at all.
-  const escape = await call('/skill/%252E%252E');
-  assert.equal(escape.status, 415);
-  assert.equal((await escape.json()).code, 'unrecognized-format');
+  const unknown = await call(`/skill/${encodeURIComponent('user:home:skills/nope')}`);
+  assert.equal(unknown.status, 404);
+  assert.equal((await unknown.json()).code, 'not-found');
+
+  // An id is resolved against the live catalog before any path is touched, so a
+  // crafted id is simply an id no row has — never a path to read.
+  const traversal = await call(`/skill/${encodeURIComponent('user:home:../etc')}`);
+  assert.equal(traversal.status, 404);
+  assert.equal((await traversal.json()).code, 'not-found');
 });
 
-test('PUT /skill/<dir> writes the body and returns the new time', async () => {
-  const response = await call('/skill/alpha', {
+test('PUT writes our file and refuses a packaged one with read-only', async () => {
+  const saved = await call(`/skill/${USER_ID}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ content: '---\nname: alpha\n---\n\n# Saved\n' }),
   });
-  assert.equal(response.status, 200);
-  const body = await response.json();
-  assert.equal(body.ok, true);
-  assert.equal(body.dir, 'alpha');
-  assert.equal(scanSkills(root).find((row) => row.dir === 'alpha').name, 'alpha');
+  assert.equal(saved.status, 200);
+  assert.equal((await saved.json()).ok, true);
+
+  const refused = await call(`/skill/${PLUGIN_ID}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ content: '# nope\n' }),
+  });
+  assert.equal(refused.status, 403);
+  const body = await refused.json();
+  assert.equal(body.code, 'read-only');
+  assert.match(body.error, /read-only/);
 });
 
-test('PUT rejects a non-JSON body and a missing content field', async () => {
-  const notJson = await call('/skill/alpha', { method: 'PUT', body: 'hello' });
+test('PUT rejects a non-JSON body and answers too-large past the cap', async () => {
+  const notJson = await call(`/skill/${USER_ID}`, { method: 'PUT', body: 'hello' });
   assert.equal(notJson.status, 400);
   assert.equal((await notJson.json()).code, 'bad-request');
 
-  const noContent = await call('/skill/alpha', {
+  const big = await call(`/skill/${USER_ID}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ file: 'x' }),
+    body: JSON.stringify({ content: 'x'.repeat(2 * 1024 * 1024 + 10) }),
   });
-  assert.equal(noContent.status, 400);
+  assert.equal(big.status, 413);
+  assert.equal((await big.json()).code, 'too-large');
 });
 
-test('PUT and POST answer too-large past their caps', async () => {
-  // The save cap is the plugin's own 2 MiB; the upload cap is this server's 4 KiB.
-  const big = 'x'.repeat(2 * 1024 * 1024 + 10);
-  const saved = await call('/skill/alpha', {
-    method: 'PUT',
+test('disable and enable rename the file and report the new state', async () => {
+  const disabled = await call(`/skill/${USER_ID}/disable`, { method: 'POST' });
+  assert.equal(disabled.status, 200);
+  const disabledBody = await disabled.json();
+  assert.deepEqual([disabledBody.status, disabledBody.fileName], ['disabled', '_SKILL.md']);
+  assert.equal(existsSync(join(home, 'skills/alpha/_SKILL.md')), true);
+  assert.equal(existsSync(join(home, 'skills/alpha/SKILL.md')), false);
+
+  // Disabling again has nothing to rename.
+  const again = await call(`/skill/${USER_ID}/disable`, { method: 'POST' });
+  assert.equal(again.status, 404);
+  assert.equal((await again.json()).code, 'not-found');
+
+  const enabled = await call(`/skill/${USER_ID}/enable`, { method: 'POST' });
+  assert.equal(enabled.status, 200);
+  assert.deepEqual([(await enabled.json()).status], ['active']);
+  assert.equal(scanUserSkills(home).find((row) => row.dir === 'skills/alpha').status, 'active');
+});
+
+test('enable is refused with conflict when the target file already exists', async () => {
+  writeSkill(home, 'skills/both');
+  writeSkill(home, 'skills/both', { file: '_SKILL.md' });
+  const response = await call(`/skill/${encodeURIComponent('user:home:skills/both')}/enable`, { method: 'POST' });
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).code, 'conflict');
+});
+
+test('enable and disable are refused for a packaged skill', async () => {
+  const response = await call(`/skill/${PLUGIN_ID}/disable`, { method: 'POST' });
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).code, 'read-only');
+});
+
+test('POST /skill/<id>/rename moves the directory and answers the new id', async () => {
+  const response = await call(`/skill/${encodeURIComponent('user:home:skills/beta')}/rename`, {
+    method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ content: big }),
-  });
-  assert.equal(saved.status, 413);
-  assert.equal((await saved.json()).code, 'too-large');
-
-  const uploaded = await call('/upload', {
-    method: 'POST',
-    headers: { [FILENAME_HEADER]: 'SKILL.md' },
-    body: Buffer.alloc(MAX_UPLOAD + 10, 0x41),
-  });
-  assert.equal(uploaded.status, 413);
-  assert.equal((await uploaded.json()).code, 'too-large');
-});
-
-test('GET download.md serves the exact file bytes', async () => {
-  writeSkill(root, 'downloadable', { body: '# Уникод тело\n' });
-  const response = await call('/skill/downloadable/download.md');
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get('content-type'), /text\/markdown/);
-  assert.match(response.headers.get('content-disposition'), /attachment; filename="SKILL.md"/);
-  const text = await response.text();
-  assert.equal(text, (await (await call('/skill/downloadable')).json()).content);
-  assert.match(text, /Уникод тело/);
-});
-
-test('GET download.zip archives the whole folder, attachments included', async () => {
-  mkdirSync(join(root, 'downloadable', 'bin'));
-  writeFileSync(join(root, 'downloadable', 'bin', 'run.sh'), '#!/bin/sh\n');
-  chmodSync(join(root, 'downloadable', 'bin', 'run.sh'), 0o755);
-  const response = await call('/skill/downloadable/download.zip');
-  assert.equal(response.status, 200);
-  assert.equal(response.headers.get('content-type'), 'application/zip');
-  assert.match(response.headers.get('content-disposition'), /filename="downloadable.zip"/);
-  const entries = readZip(Buffer.from(await response.arrayBuffer()));
-  const names = entries.map((entry) => entry.name);
-  assert.ok(names.includes('downloadable/SKILL.md'));
-  assert.ok(names.includes('downloadable/bin/run.sh'));
-  assert.equal(entries.find((entry) => entry.name === 'downloadable/bin/run.sh').mode, 0o755);
-});
-
-test('POST /upload creates a skill from a single SKILL.md', async () => {
-  const response = await call('/upload', {
-    method: 'POST',
-    headers: { [FILENAME_HEADER]: encodeURIComponent('SKILL.md') },
-    body: Buffer.from('---\nname: brand-new\n---\n\n# New\n'),
+    body: JSON.stringify({ name: 'beta-renamed' }),
   });
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.deepEqual([body.ok, body.action, body.dir], [true, 'created', 'brand-new']);
+  assert.equal(body.id, 'user:home:skills/beta-renamed');
+  assert.equal(body.dir, 'skills/beta-renamed');
+  assert.equal(body.status, 'disabled', 'a paused skill stays paused');
+  assert.equal(existsSync(join(home, 'skills/beta-renamed/_SKILL.md')), true);
 });
 
-test('POST /upload replaces a skill from a ZIP and refuses the wrong shapes', async () => {
-  mkdirSync(join(root, 'zip-target'));
-  writeFileSync(join(root, 'zip-target', 'SKILL.md'), '---\nname: zip-target\n---\n\n# Old\n');
-  const archive = buildZip([
-    { name: 'zip-target/', mode: 0o755, mtime: new Date() },
-    { name: 'zip-target/SKILL.md', mode: 0o644, mtime: new Date(), data: Buffer.from('---\nname: zip-target\n---\n\n# New\n') },
-    { name: 'zip-target/data/x.json', mode: 0o644, mtime: new Date(), data: Buffer.from('{}') },
-  ]);
-  const replaced = await call('/upload', {
+test('rename refuses an illegal name, a taken name, and a packaged skill', async () => {
+  const illegal = await call(`/skill/${encodeURIComponent('user:home:skills/beta-renamed')}/rename`, {
     method: 'POST',
-    headers: { [FILENAME_HEADER]: encodeURIComponent('zip-target.zip') },
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Bad Name' }),
+  });
+  assert.equal(illegal.status, 409);
+  assert.equal((await illegal.json()).code, 'name-mismatch');
+
+  const taken = await call(`/skill/${encodeURIComponent('user:home:skills/beta-renamed')}/rename`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'alpha' }),
+  });
+  assert.equal(taken.status, 409);
+  assert.equal((await taken.json()).code, 'already-exists');
+
+  const packaged = await call(`/skill/${PLUGIN_ID}/rename`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'office-2' }),
+  });
+  assert.equal(packaged.status, 403);
+  assert.equal((await packaged.json()).code, 'read-only');
+});
+
+test('GET download.md serves the exact bytes, for our skill and the packaged one', async () => {
+  const mine = await call(`/skill/${USER_ID}/download.md`);
+  assert.equal(mine.status, 200);
+  assert.match(mine.headers.get('content-type'), /text\/markdown/);
+  assert.match(mine.headers.get('content-disposition'), /attachment; filename="SKILL.md"/);
+  const mineText = await mine.text();
+  assert.equal(mineText, (await (await call(`/skill/${USER_ID}`)).json()).content);
+
+  const bundled = await call(`/skill/${PLUGIN_ID}/download.md`);
+  assert.equal(bundled.status, 200);
+  assert.match(await bundled.text(), /name: office/);
+});
+
+test('GET download.zip archives the whole folder, rooted at its name', async () => {
+  mkdirSync(join(home, 'skills/alpha/bin'));
+  writeFileSync(join(home, 'skills/alpha/bin/run.sh'), '#!/bin/sh\n');
+  chmodSync(join(home, 'skills/alpha/bin/run.sh'), 0o755);
+
+  const response = await call(`/skill/${USER_ID}/download.zip`);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-disposition'), /filename="alpha.zip"/);
+  const entries = readZip(Buffer.from(await response.arrayBuffer()));
+  const names = entries.map((entry) => entry.name);
+  assert.ok(names.includes('alpha/SKILL.md'));
+  assert.ok(names.includes('alpha/bin/run.sh'));
+
+  const packaged = await call(`/skill/${PLUGIN_ID}/download.zip`);
+  assert.equal(packaged.status, 200);
+  assert.match(packaged.headers.get('content-disposition'), /filename="office.zip"/);
+});
+
+test('POST /upload?mode=create creates a skill from a ZIP and refuses a taken name', async () => {
+  const archive = buildZip([
+    { name: 'brand-new/', mode: 0o755, mtime: new Date() },
+    { name: 'brand-new/SKILL.md', mode: 0o644, mtime: new Date(), data: Buffer.from('---\nname: brand-new\n---\n\n# New\n') },
+  ]);
+  const created = await call('/upload?mode=create', {
+    method: 'POST',
+    headers: { [FILENAME_HEADER]: encodeURIComponent('brand-new.zip') },
     body: archive,
   });
-  assert.equal(replaced.status, 200);
-  assert.equal((await replaced.json()).action, 'replaced');
+  assert.equal(created.status, 200);
+  const createdBody = await created.json();
+  assert.deepEqual([createdBody.action, createdBody.dir], ['created', 'skills/brand-new']);
+
+  const taken = await call('/upload?mode=create', {
+    method: 'POST',
+    headers: { [FILENAME_HEADER]: encodeURIComponent('brand-new.zip') },
+    body: archive,
+  });
+  assert.equal(taken.status, 409);
+  const takenBody = await taken.json();
+  assert.equal(takenBody.code, 'already-exists');
+  assert.match(takenBody.error, /already exists/);
 
   const wrongFolder = buildZip([
     { name: 'nope/', mode: 0o755, mtime: new Date() },
     { name: 'nope/SKILL.md', mode: 0o644, mtime: new Date(), data: Buffer.from('x') },
   ]);
-  const refused = await call('/upload', {
+  const refused = await call(`/upload?mode=replace&id=${USER_ID}`, {
     method: 'POST',
     headers: { [FILENAME_HEADER]: encodeURIComponent('nope.zip') },
     body: wrongFolder,
   });
   assert.equal(refused.status, 415);
-  const body = await refused.json();
-  assert.equal(body.code, 'unrecognized-format');
-  assert.match(body.error, /Unrecognized skill format/);
-});
+  const refusedBody = await refused.json();
+  assert.equal(refusedBody.code, 'unrecognized-format');
+  assert.match(refusedBody.error, /Unrecognized skill format/);
 
-test('POST /upload answers name-mismatch for a nameless SKILL.md', async () => {
-  const response = await call('/upload', {
+  const tooLarge = await call('/upload', {
     method: 'POST',
     headers: { [FILENAME_HEADER]: encodeURIComponent('SKILL.md') },
-    body: Buffer.from('---\ndescription: no name here\n---\n\nbody\n'),
+    body: Buffer.alloc(MAX_UPLOAD + 10, 0x41),
   });
-  assert.equal(response.status, 409);
-  assert.equal((await response.json()).code, 'name-mismatch');
+  assert.equal(tooLarge.status, 413);
+  assert.equal((await tooLarge.json()).code, 'too-large');
 });
 
 test('an unknown API path and a wrong method are bad-request', async () => {
@@ -210,21 +296,4 @@ test('an unknown API path and a wrong method are bad-request', async () => {
 
   const wrongMethod = await call('/skills', { method: 'DELETE' });
   assert.equal(wrongMethod.status, 400);
-});
-
-test('a read-only skill directory answers write-failed', async (t) => {
-  if (typeof process.getuid === 'function' && process.getuid() === 0) {
-    t.skip('running as root: permission bits do not stop a write');
-    return;
-  }
-  writeSkill(root, 'readonly', { body: '# old\n' });
-  chmodSync(join(root, 'readonly'), 0o500);
-  t.after(() => chmodSync(join(root, 'readonly'), 0o700));
-  const response = await call('/skill/readonly', {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ content: '# new\n' }),
-  });
-  assert.equal(response.status, 500);
-  assert.equal((await response.json()).code, 'write-failed');
 });

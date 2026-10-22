@@ -1,15 +1,24 @@
 /**
- * Path policy for the skills root.
+ * Path policy for the harness home.
  *
- * Every host-side file operation goes through this module: a directory name
+ * Every host-side file operation goes through this module: a relative skill path
  * arrives from the browser (or from an uploaded archive), and nothing else may
- * reach the filesystem until it has been proved to be one plain component under
- * the configured root. Symlinks are never followed: callers use `lstat` and
- * refuse anything that is not the file or directory kind they expect.
+ * reach the filesystem until it has been proved to stay inside the harness home.
+ * A skill is addressed by its path relative to that home — `skills/foo`,
+ * `profiles/web/skills/bar` — because the same directory name may occur under
+ * several roots and those are different skills. Symlinks are never followed:
+ * starting at the home itself, every segment is `lstat`ed and refused if it is a
+ * link, and files must be plain regular files.
  */
-import { lstatSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
+
+/** Options accepted by the path resolvers. */
+export interface PathOptions {
+  /** Accept a symbolic link whose target lies outside the base (read-only roots). */
+  readonly allowExternalLinks?: boolean;
+}
 
 /** Rejection raised by the path policy; `code` is the wire error code. */
 export class PathRefused extends Error {
@@ -27,8 +36,36 @@ export class PathRefused extends Error {
   }
 }
 
-/** A legal skill directory name: lowercase kebab-case, no dots or separators. */
+/** A legal new-skill directory name: lowercase kebab-case, no dots or separators. */
 const SKILL_DIR_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** One segment of a relative skill path: no dots at the front, no separators. */
+const PATH_SEGMENT = /^[A-Za-z0-9@][A-Za-z0-9._@+-]*$/;
+
+/** Directory names never descended into while scanning for skills. */
+export const SKIPPED_DIRECTORIES: ReadonlySet<string> = new Set([
+  'node_modules',
+  '.git',
+  '.hg',
+  '.svn',
+  '.cache',
+  '.caches',
+  'cache',
+  'caches',
+  '.pnpm-store',
+  'pnpm-store',
+  '.pnpm-state',
+  'pnpm-state',
+  '.venv',
+  'venv',
+  'virtualenv',
+  '__pycache__',
+  '.tmp',
+  '.trash',
+  '.next',
+  '.turbo',
+  '.parcel-cache',
+]);
 
 /**
  * Expand a leading `~` against the OS home.
@@ -123,6 +160,88 @@ export function resolveSkillDir(root: string, name: string): string {
   const target = resolve(root, name);
   if (!isInside(root, target)) throw new PathRefused('The skill directory escapes the skills root');
   return target;
+}
+
+/**
+ * Split a relative skill path into its segments.
+ * @param relative - path relative to the harness home, with `/` separators.
+ * @returns the validated segments.
+ * @throws {PathRefused} for an absolute path, an empty or dot segment, `..`,
+ *   backslashes, NUL bytes, or a segment that is not a plain name.
+ */
+export function splitSkillPath(relative: string): string[] {
+  if (typeof relative !== 'string' || relative === '') {
+    throw new PathRefused('The skill path is empty');
+  }
+  if (relative.includes('\0')) throw new PathRefused('The skill path contains a NUL byte');
+  if (relative.includes('\\')) throw new PathRefused('The skill path contains a backslash');
+  if (relative.startsWith('/')) throw new PathRefused('The skill path is absolute');
+  const segments = relative.split('/');
+  for (const segment of segments) {
+    if (segment === '' || segment === '.' || segment === '..') {
+      throw new PathRefused('The skill path contains an empty, "." or ".." segment');
+    }
+    if (!PATH_SEGMENT.test(segment)) {
+      throw new PathRefused(`The skill path segment "${segment}" is not a plain directory name`);
+    }
+  }
+  return segments;
+}
+
+/**
+ * Resolve a relative skill path against a base directory.
+ *
+ * Escape is proved, not assumed: the path is split into plain segments first, and
+ * the result must still sit under the base once symlinks are resolved. That
+ * second check is what makes a link to `/etc` or to another package useless as an
+ * escape, while still allowing the symlinked tree a package manager builds —
+ * pnpm installs every package as a link into its store, and refusing those would
+ * hide every packaged skill on such a host.
+ *
+ * Files themselves are never followed: callers ask {@link memberKind} and accept
+ * only a regular file, so a symlinked `SKILL.md` can never be read or written
+ * through this module.
+ * @param base - absolute base directory.
+ * @param relative - path relative to the base, `/` separated.
+ * @param options - `allowExternalLinks` accepts a link whose target sits outside
+ *   the base, which is how a package manager installs dependencies; it is for
+ *   read-only package roots only, never for a writable tree.
+ * @returns the absolute path, with symlinks resolved.
+ * @throws {PathRefused} when the path escapes the base in any way.
+ */
+export function resolveSkillPath(base: string, relative: string, options: PathOptions = {}): string {
+  const segments = splitSkillPath(relative);
+  const root = resolve(base);
+  const lexical = join(root, ...segments);
+  if (!isWithin(root, lexical)) throw new PathRefused('The skill path escapes its root');
+
+  let real: string;
+  try {
+    real = realpathSync(lexical);
+  } catch {
+    // Nothing there yet: the lexical path is what a create would use.
+    return lexical;
+  }
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    realRoot = root;
+  }
+  if (real !== realRoot && !isWithin(realRoot, real) && options.allowExternalLinks !== true) {
+    throw new PathRefused('The skill path escapes its root through a symbolic link');
+  }
+  return real;
+}
+
+/**
+ * Whether a relative path stays inside one of the given root prefixes.
+ * @param relative - path relative to the harness home.
+ * @param roots - relative prefixes such as `skills` or `profiles`.
+ * @returns whether the path is one of the roots or sits below one.
+ */
+export function isUnderRoots(relative: string, roots: readonly string[]): boolean {
+  return roots.some((root) => relative === root || relative.startsWith(`${root}/`));
 }
 
 /**

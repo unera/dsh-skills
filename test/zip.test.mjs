@@ -78,16 +78,16 @@ test('round trip keeps nested attachments, directories, and modes', () => {
 });
 
 test('a skill directory archives as its own root, attachments included', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'demo', { body: '# demo' });
-  mkdirSync(join(root, 'demo', 'bin'));
-  writeFileSync(join(root, 'demo', 'bin', 'tool.sh'), '#!/bin/sh\n');
-  chmodSync(join(root, 'demo', 'bin', 'tool.sh'), 0o755);
-  mkdirSync(join(root, 'demo', 'data'));
-  writeFileSync(join(root, 'demo', 'data', 'x.json'), '{"a":1}');
+  const home = makeRoot();
+  t.after(() => dropRoot(home));
+  writeSkill(home, 'skills/demo', { body: '# demo' });
+  mkdirSync(join(home, 'skills/demo', 'bin'));
+  writeFileSync(join(home, 'skills/demo', 'bin', 'tool.sh'), '#!/bin/sh\n');
+  chmodSync(join(home, 'skills/demo', 'bin', 'tool.sh'), 0o755);
+  mkdirSync(join(home, 'skills/demo', 'data'));
+  writeFileSync(join(home, 'skills/demo', 'data', 'x.json'), '{"a":1}');
 
-  const entries = readZip(zipSkill(root, 'demo'));
+  const entries = readZip(zipSkill(home, 'skills/demo'));
   const names = entries.map((entry) => entry.name);
   assert.ok(names.includes('demo/SKILL.md'));
   assert.ok(names.includes('demo/bin/tool.sh'));
@@ -97,15 +97,15 @@ test('a skill directory archives as its own root, attachments included', (t) => 
 });
 
 test('collectSkillTree never follows a symlink out of the tree', (t) => {
-  const root = makeRoot();
-  t.after(() => dropRoot(root));
-  writeSkill(root, 'demo');
-  const outside = join(root, 'demo', 'escape.txt');
+  const home = makeRoot();
+  t.after(() => dropRoot(home));
+  writeSkill(home, 'skills/demo');
+  const outside = join(home, 'skills/demo', 'escape.txt');
   writeFileSync(outside, 'outside');
-  mkdirSync(join(root, 'demo', 'dir'));
+  mkdirSync(join(home, 'skills/demo', 'dir'));
 
-  symlinkSync('/etc', join(root, 'demo', 'dir', 'etc'));
-  const names = collectSkillTree(root, 'demo').map((entry) => entry.name);
+  symlinkSync('/etc', join(home, 'skills/demo', 'dir', 'etc'));
+  const names = collectSkillTree(home, 'skills/demo').map((entry) => entry.name);
   assert.ok(!names.some((name) => name.includes('etc')));
 });
 

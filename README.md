@@ -1,22 +1,53 @@
 # @dr-co/dsh-skills
 
-A **Skills page** for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI: a sidebar row that opens a full main panel listing every skill in `$DSH_HOME/skills`, active and disabled, with download, upload, and editing built in.
+A **Skills page** for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI: a sidebar row that opens a full main panel listing every skill the host knows about — our own, the ones bundled inside installed packages, and the ones a plugin provides without any file — with download, upload, rename, enable/disable, and editing built in.
 
-The page reads the skills directory itself instead of asking `ctx.skills`, because that service only reports the skills it can load. A skill whose file is named `_SKILL.md` is invisible to the core on purpose — and it is exactly the one you need to see when a skill stops working.
+The page reads the filesystem itself instead of asking `ctx.skills` alone, because that service only reports the skills it can load. A skill whose file is named `_SKILL.md` is invisible to the core on purpose — and it is exactly the one you need to see when a skill stops working.
 
 ## What it does
 
-- **List** — one row per skill directory. The status is a single dot, green for `SKILL.md` and grey for `_SKILL.md`, with the word in its tooltip and accessible name; the frontmatter `name` (or the directory name) carries the description underneath and takes every pixel the row has left; the path relative to the skills root is shown in full up to 15 characters and, past that, keeps its first 7 and last 7 around three dots (`split/p...ath/foo`) with the full path in its tooltip. Below 640px the path column is not rendered at all (the row keeps the full path in its accessible name), so the row stays two lines tall and never scrolls sideways.
-- **Row menu** — `Download SKILL.md`, `Download ZIP`, `Upload`, `Edit SKILL.md`.
+The list is three sections, each with its own heading, count, and empty state:
+
+| Section | Where it comes from | Colours | Actions |
+| --- | --- | --- | --- |
+| **Standard skills in `$DSH_HOME/skills`** | our own directories | green dot when active, grey when disabled, normal name colour | everything: edit, rename, upload, both downloads, enable/disable |
+| **Skills bundled with plugins** | `<pkg>/skills/*` and `<pkg>/assets/*` of every installed package, found through their manifests | pink dot and pink name when active, grey-pink when disabled | download only — they live in `node_modules` |
+| **Provided by plugins (no file)** | `ctx.skills.list()` entries with no file on disk | pink, dashed dot | none |
+
+- **Status** is one 11px dot: green for `SKILL.md`, grey for `_SKILL.md` (ours); pink for an active packaged skill, grey-pink for a disabled one. A directory holding both files is reported as a conflict, in red. The word lives in the dot's tooltip and accessible name, not in the row.
+- **Name** takes every pixel the row has left, with the frontmatter `description` underneath; both are cut with an ellipsis, never wrapped.
+- **Path** is relative to `$DSH_HOME` when it is inside it, otherwise relative to the package; shown in full up to 15 characters and, past that, as its first 7 and last 7 around three dots (`split/p...ath/foo`). The full path is in the tooltip. Below 640px the column is not rendered at all and the row keeps the path in its accessible name.
+- **Row menu** — `Edit`, `Rename`, `Download SKILL.md`, `Download ZIP`, `Upload`, `Enable`/`Disable`, in that order, separated into groups. On a wide screen the first action is also reachable from the split button: a pencil that opens the editor plus a chevron for the menu. On a narrow one there is a single `⋯` and Edit is the first item.
+- **Edit** — a full-page view inside the panel (not a dialog, not a URL): one plain monospace `textarea` filling the panel, `Cancel` and `Save` at the bottom. There is no preview at any width. `Save` stays disabled until something changes; a file that changed on disk after it was opened raises a warning before the first save, and the second press overwrites.
+- **Rename** — renames the skill's *directory* (never the frontmatter `name`), inline, with the current name prefilled, kebab-case validation, and an atomic `rename()` inside the same parent. A name that is already taken is refused, and a failure leaves the original directory untouched.
+- **Enable / Disable** — the harness' own switch: `SKILL.md` → `_SKILL.md` and back. After the rename the row updates in place (dot, path, menu) and a notice says exactly what happened on disk: `File SKILL.md renamed to _SKILL.md`.
 - **Download SKILL.md** — the exact file bytes, `Content-Disposition: attachment`.
-- **Download ZIP** — the whole skill directory under its own name, attachments (`bin/`, `data/`, anything else) included, so the archive can be uploaded back as-is.
-- **Upload** — also available at the top of the page. The format is decided by the uploaded bytes, never by the form field (rules below).
-- **Edit** — a full-page view inside the panel (not a dialog, not a URL): a plain monospace `textarea` on the left, the rendered markdown on the right, updating as you type. Below 640px the preview is not rendered at all — a phone has no width for it — so the `textarea` takes the whole panel and Cancel/Save stay at the bottom. `Cancel` discards the draft and returns to the list; `Save` writes the file and returns to the refreshed list. `Save` stays disabled until something changes, and a file that changed on disk after it was opened raises a warning before the first save — the second press overwrites.
-- **English and Russian** — the whole page, error messages included. Russian is a complete dictionary registered with `ctx.locale.addLanguage({ id: 'ru', label: 'Русский', fallback: 'en' })`; nothing falls back to English mid-sentence.
+- **Download ZIP** — the whole skill directory rooted at its own name, attachments (`bin/`, `data/`, anything else) included, so the archive can be uploaded back as-is.
+- **English and Russian** — the whole page, notices and error messages included. Russian is a complete dictionary registered with `ctx.locale.addLanguage({ id: 'ru', label: 'Русский', fallback: 'en' })`; nothing falls back to English mid-sentence.
 
-### Not in this version
+### Colours and themes
 
-**Enable/disable is deliberately out of scope.** Status is read-only: the page shows `Disabled` and leaves the file alone. Turning a skill off is a rename (`SKILL.md` → `_SKILL.md`) on disk, and a half-built switch for it would be worse than none. Saving the body of a disabled skill writes `_SKILL.md` — editing never changes a skill's status by accident.
+Green and grey are the shell's own tokens (`--dsw-alias-state-success-primary` for on, `--dsw-alias-state-idle-primary` for off), so they match the rest of the interface in every theme for free. Pink is not in the token set, so the plugin defines two variables of its own and gives both palettes their own values:
+
+| Palette | `--dshsk-plugin-accent` | contrast on the panel | `--dshsk-plugin-accent-muted` | contrast |
+| --- | --- | --- | --- | --- |
+| light (`#ffffff`) | `#c2185b` | 5.87:1 | `#8d5f72` | 5.23:1 |
+| dark (`#232324`) | `#f472b6` | 5.93:1 | `#c98ba6` | 5.78:1 |
+
+Both clear the 4.5:1 bar for text and the 3:1 bar for the dot, and both are above the shell's green on white (2.28:1). The dark block keys off `body[data-ds-dark-theme]` — the attribute the shell's own theme presenter writes when it applies a snapshot — and *not* off `prefers-color-scheme`, because the resolved scheme follows the user's setting (including "system" dark and registered themes), not the operating system. The test recomputes both ratios from the values in `src/client/styles.js`.
+
+### Two uploads, two contracts
+
+The page button and the row menu are not the same operation, and the difference is deliberate: a stray drop should not be able to overwrite a working skill.
+
+| Upload | Accepted | Name comes from | If the name is taken |
+| --- | --- | --- | --- |
+| **Page button (create)** | only a ZIP with one top-level folder containing `SKILL.md` | the folder name (kebab-case) | refused: *a skill with this name already exists* — replace it from the row menu instead |
+| **Row menu (replace)** | a single `SKILL.md`, or a ZIP whose folder is this skill's own name | the row | — (this is the only way to replace) |
+
+A new skill is created from a zip whose top-level folder is the skill name; a single `SKILL.md` is only accepted when replacing an existing skill. Everything else — several top-level entries, `SKILL.md` at the archive root, an archive without `SKILL.md`, an illegal folder name, a broken archive, a non-ZIP file for the create upload, a file not named `SKILL.md` for the replace upload — is refused with `Unrecognized skill format` («Нераспознаваемый формат скилла») and nothing on disk changes.
+
+Safety, in the order it happens: every path is resolved and proved to stay inside its root (traversal segments, absolute paths, drive letters and leading dots are refused before the filesystem sees them); a skill directory and its file must be real — a symlinked `SKILL.md` is skipped by the list and never read, written, or archived; a packaged skill is refused by the *host* for every write (`403 read-only`), not merely hidden by the browser; uploads are capped; a ZIP is unpacked into a dot-prefixed staging directory and swapped in by rename only after every member has validated, with the previous directory restored if the swap fails; file modes from the archive are preserved. A refused upload leaves the tree byte-identical, which is what the tests assert.
 
 ## Install
 
@@ -38,43 +69,17 @@ Restart the Web GUI afterwards. The sidebar gains a **Skills** row after Plugins
 
 ### Configuration
 
-The row in the profile's patch (or a `dsh plugin add` config override) accepts:
-
 ```yaml
 - id: dsh-skills
   name: '@dr-co/dsh-skills'
   config:
-    skillsRoot: /srv/skills      # default: $DSH_HOME/skills, then ~/.dsh/skills
-    dshHome: /home/dsh/work/ai/.dsh  # only used when skillsRoot is absent
-    maxUploadBytes: 8388608      # default 8 MiB
+    dshHome: /home/dsh/work/ai/.dsh   # default: $DSH_HOME, then ~/.dsh
+    dshInstall: /opt/dsh              # default: found from the running CLI
+    skillsDir: skills                 # our own skills, relative to the home
+    maxUploadBytes: 8388608           # default 8 MiB
 ```
 
-The skills root follows the harness' own precedence — an explicit `skillsRoot`, then `$DSH_HOME`, then `~/.dsh` — with a leading `~` expanded. A blank `$DSH_HOME` counts as unset, so a blank variable never resolves the root to the working directory. The root is created at mount time when it is missing.
-
-## Upload format rules
-
-The bytes decide, not the file name:
-
-1. **A single file named `SKILL.md`.** Its frontmatter `name` addresses the target: an existing skill whose directory *or* frontmatter name matches is rewritten in place (and keeps its status — a disabled skill stays `_SKILL.md`); with no match, a new directory is created under that name. The name must be lowercase kebab-case (`[a-z0-9]+(-[a-z0-9]+)*`), with no path separators and no leading dot. A `SKILL.md` with no frontmatter name is refused with `name-mismatch`, because there is nothing to address.
-2. **A ZIP that contains exactly one top-level directory `<folder>/`, with `<folder>/SKILL.md` inside.** Accepted only when `<folder>` matches an installed skill directory; that directory is then replaced wholesale — the old content is deleted, the archive unpacked in its place.
-3. **Everything else is refused** with `Unrecognized skill format` («Нераспознаваемый формат скилла») and nothing on disk changes: several top-level entries, a root-level `SKILL.md` with no folder, a folder that is not installed, an archive with no `SKILL.md` (only `_SKILL.md` counts as missing), a traversal or absolute member, a symlink member, an encrypted or ZIP64 archive, an unsupported compression method, a non-ZIP file that is not named `SKILL.md`, or a file with NUL bytes.
-
-| Input | Result |
-| --- | --- |
-| `SKILL.md`, name matches a skill | that skill's file rewritten, status preserved |
-| `SKILL.md`, name is new and legal | new skill directory created |
-| `SKILL.md`, no frontmatter name | `name-mismatch`, nothing written |
-| `SKILL.md`, illegal name | `name-mismatch`, nothing written |
-| any other single file | `unrecognized-format`, nothing written |
-| ZIP, one folder, folder installed, `SKILL.md` inside | directory replaced wholesale |
-| ZIP, folder not installed | `unrecognized-format` |
-| ZIP, several top-level entries | `unrecognized-format` |
-| ZIP, `SKILL.md` at the root | `unrecognized-format` |
-| ZIP, no `<folder>/SKILL.md` | `unrecognized-format` |
-| ZIP, `../`, absolute path, or symlink member | `unrecognized-format` |
-| over the size cap | `too-large`, nothing written |
-
-Safety, in the order it happens: every path is resolved and proved to stay inside the skills root (traversal segments, absolute paths, drive letters, and a leading dot are refused before the filesystem sees them); a skill directory and its file must both be real — a symlinked one is skipped by the list and never followed by a read, a save, or an archive; uploads are capped; a ZIP is unpacked into a dot-prefixed staging directory inside the root and swapped in by rename only after every member has validated, with the previous directory restored if the swap fails; file modes from the archive are preserved. A refused upload leaves the tree byte-identical, which is what the tests assert.
+The home follows the harness' own precedence — an explicit `dshHome`, then `$DSH_HOME`, then `~/.dsh` — with a leading `~` expanded. A blank `$DSH_HOME` counts as unset, so a blank variable never resolves the path to the working directory. The installation is found by walking up from the running `dsh` entry point to the package whose manifest is named `@deepseek-ai/dsh`; across its `node_modules` and every profile's `node_modules`, packages are read from their manifests only (a package's own `node_modules` is never descended into). Packaged skills are cached for 30 seconds — they cannot change under a running host except by an install — and our own skills are always read live.
 
 ## Host API
 
@@ -82,25 +87,31 @@ One prefix route, `/dsh-skills/api`, JSON with a `code` the client localizes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/skills` | root plus every skill row |
-| `GET` | `/skill/<dir>` | one file: name, contents, `mtimeMs` |
-| `PUT` | `/skill/<dir>` | `{content}` → writes atomically, preserves mode and status |
-| `GET` | `/skill/<dir>/download.md` | exact file bytes |
-| `GET` | `/skill/<dir>/download.zip` | whole directory, rooted at its name |
-| `POST` | `/upload` | raw bytes; name in the `x-dsh-skills-filename` header (percent-encoded) |
+| `GET` | `/skills` | home, roots, and every row with its `actions` |
+| `GET` | `/skill/<id>` | one file: name, contents, `mtimeMs`, status |
+| `PUT` | `/skill/<id>` | `{content}` → writes atomically, preserves mode and status |
+| `POST` | `/skill/<id>/enable` · `/disable` | rename the file, the harness' own switch |
+| `POST` | `/skill/<id>/rename` | `{name}` → rename the directory inside its parent |
+| `GET` | `/skill/<id>/download.md` | exact file bytes |
+| `GET` | `/skill/<id>/download.zip` | whole directory, rooted at its name |
+| `POST` | `/upload?mode=create` | a ZIP that creates a new skill |
+| `POST` | `/upload?mode=replace&id=<id>` | a file or ZIP that replaces that row's skill |
 
-Codes: `unrecognized-format` (415), `name-mismatch` (409), `not-found` (404), `too-large` (413), `bad-request` (400), `write-failed` (500). The English `error` field is a diagnostic; the page shows its own language by code.
+A row id is `<origin>:<rootKey>:<relative path>` (`user:home:skills/foo`), resolved against the live catalog on every call — an id the catalog does not have is `not-found`, never a path to read.
+
+Codes: `unrecognized-format` (415), `name-mismatch` (409), `already-exists` (409), `conflict` (409), `read-only` (403), `not-found` (404), `too-large` (413), `bad-request` (400), `write-failed` (500). The English `error` field is a diagnostic; the page shows its own language by code.
 
 **Access control is the deployment's, not the plugin's.** These are plain same-origin routes on the Web GUI's own listener: anyone who can reach the GUI can list, read, download, save, and upload skills. That matches what the GUI already grants (a session with shell access), and the harness binds itself to a single interface, but a deployment that exposes the GUI publicly should put its own authentication in front of the whole origin — the plugin adds none.
 
 ## Platform notes (what a plugin cannot do)
 
-These are limits of the installed harness (0.2.1-rc.2), verified against its shipped type definitions and bundles, not preferences:
+Verified against the installed harness (0.2.1-rc.2), not preferences:
 
-- **The sidebar cannot be extended by adding a slot.** The `sidebar` slot is `kind: 'single'` and is occupied by the shell's own `SidebarRoot`. The supported extension point is the list slot it declares, `sidebar.panellist` (`SidebarPanelIconOwnerProps { size, active }`), where the entry's `id` must equal the `main` slot's key (`MainPanelId`). That is what this plugin registers: `ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: 'dsh-skills', order: 20, label: () => ctx.locale.bind(NS)('panel'), locale: NS }, SkillsPanelIcon))`. The page is `ctx.slots.register({ name: 'main', key: 'dsh-skills', locale: NS }, SkillsPage)` — the keyed `main` slot, i.e. a real main panel beside Plugins and Tasks, not a dialog. Panel switching is the shell's own `ctx.layout.selectPanel(id)`.
-- **A plugin bundle cannot import a markdown renderer.** The client module table the shell seeds is fixed: `react`, `react/jsx-runtime`, `react-dom`, `react-dom/client`, `@deepseek-ai/cordis`, `zod`, `@tanstack/react-virtual`, `@deepseek-ai/dsh-client-store`, `@deepseek-ai/dsh-client-ui-slots`, `@deepseek-ai/dsh-client-ui-primitives`, `@deepseek-ai/dsh-client-ui-dockkit`. Shiki is compiled *into* the shell's own application bundle (its classes appear there as `shiki css-variables`), and the harness' markdown component lives in that bundle too — neither is exported, so no plugin can import either at any version. **The preview therefore uses a small self-contained renderer of our own** (`src/client/markdown.js`): headings, paragraphs, bold, italic, strikethrough, inline code, fenced code blocks, blockquotes, ordered and unordered lists, links, and tables with an alignment row. It returns React elements rather than HTML, so there is no `dangerouslySetInnerHTML` in this package and uploaded markdown can never become markup. There is no syntax highlighting in either pane, by design.
-- **A plugin has no build plugin for the bundle wrapper.** The page loads a plugin bundle as a script that calls `window.__ModuleLoader__.load({ id, factory })`; the harness generates that wrapper with its own internal tsdown plugin, which is not published. `scripts/build-client.mjs` gets the same result with esbuild plus a small wrapper — the bundle requires only `react`, which the module table does provide.
-- The host half is TypeScript and typechecked against the published `@deepseek-ai/dsh-host-webserver` route types. The browser half is plain ESM JavaScript: the slot and locale services have no published type package on this host (they live inside the shell bundle), so it is kept to what the shipped bundles demonstrably accept, and covered by tests driving the real components.
+- **The sidebar cannot be extended by adding a slot.** The `sidebar` slot is `kind: 'single'` and occupied by the shell's own `SidebarRoot`. The supported extension point is the list slot it declares, `sidebar.panellist` (`SidebarPanelIconOwnerProps { size, active }`), where the entry's `id` must equal the `main` slot's key (`MainPanelId`). This plugin registers exactly that, plus `ctx.slots.register({ name: 'main', key: 'dsh-skills', locale: NS }, SkillsPage)` — a real main panel, not a dialog. Panel switching is the shell's `ctx.layout.selectPanel(id)`. The icon is drawn inline at 24×24, `stroke="currentColor"`, `stroke-width="1.75"`, `fill="none"`, round joins, and honouring the `size` the shell passes.
+- **No shared markdown renderer is importable.** The client module table is fixed (`react`, `react/jsx-runtime`, `react-dom`, `react-dom/client`, `@deepseek-ai/cordis`, `zod`, `@tanstack/react-virtual`, `@deepseek-ai/dsh-client-store`, `@deepseek-ai/dsh-client-ui-slots`, `@deepseek-ai/dsh-client-ui-primitives`, `@deepseek-ai/dsh-client-ui-dockkit`); Shiki and the harness' markdown component live *inside* the shell bundle and are exported to nobody. Since this version has no preview, the plugin ships no renderer at all — an earlier draft had one of its own for exactly this reason.
+- **There is no split-button primitive.** `@deepseek-ai/dsh-client-ui-primitives` offers `Button`, a value `SegmentedControl`, and menu surfaces — nothing that is one control with a second action. The split here is two `<button>` elements in one bordered container with a hairline between them.
+- **A plugin has no build plugin for the bundle wrapper.** The page loads a bundle as a script calling `window.__ModuleLoader__.load({ id, factory })`; the harness generates that wrapper with an internal tsdown plugin that is not published. `scripts/build-client.mjs` gets the same result with esbuild plus a small wrapper. The bundle requires only `react`, which the module table does provide.
+- The host half is TypeScript, typechecked against the published `@deepseek-ai/dsh-host-webserver` types. The browser half is plain ESM JavaScript: the slot and locale services have no published type package on this host, so it is kept to what the shipped bundles demonstrably accept, and covered by tests driving the real components.
 
 ## Development
 
@@ -111,7 +122,7 @@ npm test            # builds both halves, then runs the node:test suites
 npm run build       # lib/index.js + lib/host/*.js, and the wrapped lib/client.js
 ```
 
-Tests: frontmatter parsing, scanning (both file names, skipped symlinks), the ZIP reader and writer (nested attachments, modes, every refusal), all upload rules including byte-identical trees after a refusal, the routes through a real HTTP server, and the client components (table, row menu, editor cancel/save/pending changes, conflict warning).
+Tests (93): frontmatter parsing; our own and packaged scanning, including the both-files conflict and the symlink rules; the ZIP reader and writer; both upload contracts with byte-identical trees after every refusal; the catalog's three origins, deduplication and display paths; the routes through a real HTTP server, including `read-only`, `already-exists`, `conflict`, and rename; and the client — three sections, dot/name colours, menu order, split versus single control, enable/disable notices, rename with validation and in-place update, the editor with no preview, the icon, and both dictionaries.
 
 ## License
 

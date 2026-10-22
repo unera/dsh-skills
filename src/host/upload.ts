@@ -18,7 +18,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { frontmatterValue, parseFrontmatter } from './frontmatter.js';
 import {
   ACTIVE_FILE,
@@ -26,10 +26,10 @@ import {
   describeSkill,
   readSkillFile,
   removeStaging,
-  scanSkills,
+  scanUserSkills,
   type SkillSummary,
 } from './scan.js';
-import { isWithin, isValidSkillDirName, memberKind, resolveSkillDir } from './paths.js';
+import { isWithin, isValidSkillDirName, memberKind, resolveSkillPath } from './paths.js';
 import { looksLikeZip, readZip, ZipRefused, type ZipEntry } from './zip.js';
 
 /** Rejection raised by the upload rules; `code` is the wire error code. */
@@ -51,12 +51,35 @@ export class UploadRejected extends Error {
 /** Why the format was refused, in words the client shows after localizing the code. */
 const UNRECOGNIZED = 'Unrecognized skill format';
 
+/**
+ * Which upload a caller is making.
+ *
+ * `replace` is the row menu's upload: the archive or file must address a skill
+ * that already exists, and nothing is ever created. `create` is the page's own
+ * upload button: it must produce a *new* skill and refuses a name that is taken,
+ * because a stray drop of an old SKILL.md should not overwrite the working skill
+ * of the same name.
+ */
+export type UploadMode = 'create' | 'replace';
+
+/** Message used whenever a create would land on an existing skill. */
+const ALREADY_EXISTS =
+  'A skill with this name already exists; replace it from the row menu instead';
+
 /** What an accepted upload will do. */
 export type UploadDescriptor =
   | {
       /** A ZIP that replaces one installed skill wholesale. */
       readonly kind: 'zip';
       /** Existing skill directory the archive is rooted at. */
+      readonly dir: string;
+      /** Archive members, validated. */
+      readonly entries: readonly ZipEntry[];
+    }
+  | {
+      /** A ZIP that creates a new skill from its single top-level directory. */
+      readonly kind: 'zip-create';
+      /** New skill directory, `<skillsDir>/<folder>`. */
       readonly dir: string;
       /** Archive members, validated. */
       readonly entries: readonly ZipEntry[];
@@ -71,14 +94,7 @@ export type UploadDescriptor =
       /** New file contents. */
       readonly content: string;
     }
-  | {
-      /** A single `SKILL.md` that creates a new skill directory. */
-      readonly kind: 'file-create';
-      /** New directory name, taken from the frontmatter `name`. */
-      readonly dir: string;
-      /** New file contents. */
-      readonly content: string;
-    };
+  ;
 
 /** Outcome of an applied upload. */
 export interface UploadResult {
@@ -88,6 +104,16 @@ export interface UploadResult {
   readonly dir: string;
   /** File written inside it. */
   readonly fileName: string;
+}
+
+/**
+ * The directory name of a skill row: the last segment of its relative path.
+ * @param dir - relative path such as `skills/foo`.
+ * @returns `foo`.
+ */
+function baseName(dir: string): string {
+  const parts = dir.split('/');
+  return parts[parts.length - 1] ?? dir;
 }
 
 /**
@@ -103,14 +129,13 @@ function topLevel(name: string): { segment: string; rest: string } {
 }
 
 /**
- * Apply the ZIP rules: one top-level directory, a `SKILL.md` inside it, and a
- * directory name that matches an installed skill.
- * @param root - absolute skills root.
+ * Validate an archive's shape: exactly one top-level directory, a `SKILL.md`
+ * inside it, and a legal folder name.
  * @param bytes - archive contents.
- * @returns the accepted descriptor.
- * @throws {UploadRejected} for every shape the rules refuse.
+ * @returns the folder name and the validated members.
+ * @throws {UploadRejected} for every other shape.
  */
-function classifyZip(root: string, bytes: Buffer): UploadDescriptor {
+function readArchive(bytes: Buffer): { folder: string; entries: ZipEntry[] } {
   let entries: ZipEntry[];
   try {
     entries = readZip(bytes);
@@ -129,88 +154,90 @@ function classifyZip(root: string, bytes: Buffer): UploadDescriptor {
   if (tops.size !== 1) {
     throw new UploadRejected(`${UNRECOGNIZED}: the archive must contain exactly one top-level directory`);
   }
-  const dir = [...tops][0];
+  const folder = [...tops][0];
 
-  // Every member has to sit under that one directory — a root-level file means
-  // the archive was not produced by "Download ZIP".
   for (const entry of entries) {
     const { segment } = topLevel(entry.name);
     // The directory's own entry (`demo/`) is fine; a bare root-level file named
     // `demo` is not, and neither is anything outside the folder.
-    if (segment !== dir || entry.name === dir) {
-      throw new UploadRejected(`${UNRECOGNIZED}: every member must sit inside "${dir}/"`);
+    if (segment !== folder || entry.name === folder) {
+      throw new UploadRejected(`${UNRECOGNIZED}: every member must sit inside "${folder}/"`);
     }
   }
 
-  const skillEntry = entries.find((entry) => entry.name === `${dir}/${ACTIVE_FILE}`);
-  if (skillEntry === undefined) {
-    throw new UploadRejected(`${UNRECOGNIZED}: the archive has no ${dir}/${ACTIVE_FILE}`);
+  if (!entries.some((entry) => entry.name === `${folder}/${ACTIVE_FILE}`)) {
+    throw new UploadRejected(`${UNRECOGNIZED}: the archive has no ${folder}/${ACTIVE_FILE}`);
   }
-
-  if (!isValidSkillDirName(dir) || memberKind(join(root, dir)) !== 'directory') {
-    throw new UploadRejected(`${UNRECOGNIZED}: no installed skill directory is named "${dir}"`);
+  if (!isValidSkillDirName(folder)) {
+    throw new UploadRejected(`${UNRECOGNIZED}: "${folder}" is not a legal skill directory name`);
   }
-
-  return { kind: 'zip', dir, entries };
+  return { folder, entries };
 }
 
 /**
- * Apply the single-file rules: exactly `SKILL.md`, a name that addresses one
- * skill, and a directory to put it in.
- * @param root - absolute skills root.
- * @param filename - name the browser reported for the file.
- * @param bytes - file contents.
+ * Classify a new-skill upload: the page's own button.
+ *
+ * Only an archive is accepted, and only one whose single top-level folder is the
+ * skill's name — the name comes from the folder, never from the file inside it,
+ * so a rename of the frontmatter cannot silently create or overwrite a different
+ * skill. A taken name is refused rather than replaced: replacing is the row
+ * menu's job, where the target is visible.
+ * @param home - absolute harness home.
+ * @param skillsDir - directory holding our skills, relative to the home.
+ * @param bytes - uploaded bytes.
  * @returns the accepted descriptor.
- * @throws {UploadRejected} for a wrong file name, binary bytes, or a missing name.
+ * @throws {UploadRejected} with `unrecognized-format` or `already-exists`.
  */
-function classifyFile(root: string, filename: string, bytes: Buffer): UploadDescriptor {
-  if (filename !== ACTIVE_FILE) {
+export function classifyCreateUpload(home: string, skillsDir: string, bytes: Buffer): UploadDescriptor {
+  if (bytes.length === 0) throw new UploadRejected(`${UNRECOGNIZED}: the upload is empty`);
+  if (!looksLikeZip(bytes)) {
+    throw new UploadRejected(`${UNRECOGNIZED}: a new skill is uploaded as a ZIP of its folder`);
+  }
+  const { folder, entries } = readArchive(bytes);
+  const exists =
+    memberKind(join(home, skillsDir, folder)) !== 'other' ||
+    scanUserSkills(home, skillsDir).some((skill) => baseName(skill.dir) === folder);
+  if (exists) throw new UploadRejected(ALREADY_EXISTS, 'already-exists');
+  return { kind: 'zip-create', dir: `${skillsDir}/${folder}`, entries };
+}
+
+/**
+ * Classify a replacement upload: a row's own menu item.
+ *
+ * The row already says which skill this is, so a single `SKILL.md` is enough — it
+ * is written into the file the skill currently has, keeping its status. An
+ * archive is accepted only when its folder is this skill's own name.
+ * @param dir - the target skill directory, relative to the home.
+ * @param fileName - the file the target currently has.
+ * @param uploadName - the browser-reported file name.
+ * @param bytes - uploaded bytes.
+ * @returns the accepted descriptor.
+ * @throws {UploadRejected} with `unrecognized-format`.
+ */
+export function classifyReplaceUpload(
+  dir: string,
+  fileName: typeof ACTIVE_FILE | typeof DISABLED_FILE,
+  uploadName: string,
+  bytes: Buffer,
+): UploadDescriptor {
+  if (bytes.length === 0) throw new UploadRejected(`${UNRECOGNIZED}: the upload is empty`);
+  const own = baseName(dir);
+
+  if (looksLikeZip(bytes)) {
+    const { folder, entries } = readArchive(bytes);
+    if (folder !== own) {
+      throw new UploadRejected(
+        `${UNRECOGNIZED}: the archive is rooted at "${folder}", but this skill is "${own}"`,
+      );
+    }
+    return { kind: 'zip', dir, entries };
+  }
+
+  if (uploadName !== ACTIVE_FILE) {
     throw new UploadRejected(`${UNRECOGNIZED}: a single-file upload must be named ${ACTIVE_FILE}`);
   }
   if (bytes.includes(0)) throw new UploadRejected(`${UNRECOGNIZED}: the file is not text`);
-  const content = bytes.toString('utf8');
-  const parsed = parseFrontmatter(content);
-  const name = frontmatterValue(parsed, 'name');
-  if (name === undefined) {
-    throw new UploadRejected(
-      'The uploaded SKILL.md has no frontmatter name, so no skill can be matched or created',
-      'name-mismatch',
-    );
-  }
-  if (!isValidSkillDirName(name)) {
-    throw new UploadRejected(
-      `The frontmatter name "${name}" is not a legal directory name (lowercase kebab-case required)`,
-      'name-mismatch',
-    );
-  }
-
-  const skills = scanSkills(root);
-  const target =
-    skills.find((skill) => skill.dir === name) ??
-    skills.find((skill) => skill.name === name) ??
-    null;
-  if (target !== null) {
-    return { kind: 'file-replace', dir: target.dir, fileName: target.fileName, content };
-  }
-
-  const directory = resolveSkillDir(root, name);
-  if (memberKind(directory) !== 'other') {
-    throw new UploadRejected(`A skill directory named "${name}" already exists but has no ${ACTIVE_FILE}`, 'name-mismatch');
-  }
-  return { kind: 'file-create', dir: name, content };
-}
-
-/**
- * Classify an upload without touching the tree.
- * @param root - absolute skills root.
- * @param filename - name the browser reported; only a single-file upload uses it.
- * @param bytes - the uploaded bytes.
- * @returns what the upload would do.
- * @throws {UploadRejected} for anything the rules refuse.
- */
-export function classifyUpload(root: string, filename: string, bytes: Buffer): UploadDescriptor {
-  if (bytes.length === 0) throw new UploadRejected(`${UNRECOGNIZED}: the upload is empty`);
-  return looksLikeZip(bytes) ? classifyZip(root, bytes) : classifyFile(root, filename, bytes);
+  return { kind: 'file-replace', dir, fileName, content: bytes.toString('utf8') };
 }
 
 /**
@@ -254,12 +281,14 @@ function extract(staging: string, dir: string, entries: readonly ZipEntry[]): st
  * @param entries - validated members.
  * @returns the applied result.
  */
-function replaceDirectory(root: string, dir: string, entries: readonly ZipEntry[]): UploadResult {
-  const live = resolveSkillDir(root, dir);
-  const staging = mkdtempSync(join(root, '.dsh-skills-staging-'));
+function replaceDirectory(home: string, dir: string, entries: readonly ZipEntry[]): UploadResult {
+  const live = resolveSkillPath(home, dir);
+  const staging = mkdtempSync(join(home, '.dsh-skills-staging-'));
   const aside = join(staging, 'old');
   try {
-    const unpacked = extract(staging, dir, entries);
+    // Archive members are rooted at the skill's own folder name, not at its
+    // path inside the home.
+    const unpacked = extract(staging, baseName(dir), entries);
     renameSync(live, aside);
     try {
       renameSync(unpacked, live);
@@ -280,17 +309,51 @@ function replaceDirectory(root: string, dir: string, entries: readonly ZipEntry[
 }
 
 /**
+ * Create a new skill directory from an archive.
+ *
+ * Staged exactly like a replacement — unpack beside the tree, then one rename —
+ * but there is nothing to swap out, and the target is proved absent both at
+ * classification and here, just before the rename.
+ * @param home - absolute harness home.
+ * @param dir - new skill directory, relative to the home.
+ * @param entries - validated members.
+ * @returns the applied result.
+ */
+function createDirectoryFromArchive(
+  home: string,
+  dir: string,
+  entries: readonly ZipEntry[],
+): UploadResult {
+  const live = resolveSkillPath(home, dir);
+  const staging = mkdtempSync(join(home, '.dsh-skills-staging-'));
+  try {
+    if (memberKind(live) !== 'other') throw new UploadRejected(ALREADY_EXISTS, 'already-exists');
+    const unpacked = extract(staging, baseName(dir), entries);
+    mkdirSync(dirname(live), { recursive: true, mode: 0o755 });
+    renameSync(unpacked, live);
+    return { action: 'created', dir, fileName: ACTIVE_FILE };
+  } catch (error) {
+    if (error instanceof UploadRejected) throw error;
+    throw new UploadRejected(`Could not create "${dir}": ${(error as Error).message}`, 'write-failed');
+  } finally {
+    removeStaging(staging);
+  }
+}
+
+/**
  * Apply a classified upload.
  * @param root - absolute skills root.
- * @param descriptor - result of {@link classifyUpload}.
+ * @param descriptor - result of {@link classifyCreateUpload} or
+ *   {@link classifyReplaceUpload}.
  * @returns what happened on disk.
  * @throws {UploadRejected} with `write-failed` when the write itself fails.
  */
-export function applyUpload(root: string, descriptor: UploadDescriptor): UploadResult {
-  if (descriptor.kind === 'zip') return replaceDirectory(root, descriptor.dir, descriptor.entries);
+export function applyUpload(home: string, descriptor: UploadDescriptor): UploadResult {
+  if (descriptor.kind === 'zip') return replaceDirectory(home, descriptor.dir, descriptor.entries);
+  if (descriptor.kind === 'zip-create') return createDirectoryFromArchive(home, descriptor.dir, descriptor.entries);
 
   if (descriptor.kind === 'file-replace') {
-    const directory = resolveSkillDir(root, descriptor.dir);
+    const directory = resolveSkillPath(home, descriptor.dir);
     const target = join(directory, descriptor.fileName);
     const temporary = join(directory, `.${descriptor.fileName}.upload.tmp`);
     try {
@@ -307,18 +370,7 @@ export function applyUpload(root: string, descriptor: UploadDescriptor): UploadR
     }
   }
 
-  const directory = resolveSkillDir(root, descriptor.dir);
-  try {
-    mkdirSync(directory, { recursive: false, mode: 0o755 });
-    writeFileSync(join(directory, ACTIVE_FILE), descriptor.content, { mode: 0o644 });
-    return { action: 'created', dir: descriptor.dir, fileName: ACTIVE_FILE };
-  } catch (error) {
-    rmSync(directory, { recursive: true, force: true });
-    throw new UploadRejected(
-      `Could not create "${descriptor.dir}": ${(error as Error).message}`,
-      'write-failed',
-    );
-  }
+  throw new UploadRejected('Unknown upload descriptor', 'bad-request');
 }
 
 /**

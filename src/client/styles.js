@@ -40,7 +40,7 @@ const CSS = String.raw`
 .dshsk-nameCell { flex: 1 1 auto; min-width: 0; overflow: hidden; }
 .dshsk-name { overflow: hidden; font-weight: 500; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
 .dshsk-nameMeta { margin-top: 1px; color: var(--dsw-alias-label-secondary, #646a73); font-size: 12px; line-height: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dshsk-pathCell { flex: 0 0 auto; max-width: 132px; }
+.dshsk-pathCell { flex: 0 0 auto; max-width: 148px; }
 .dshsk-path { display: block; max-width: 100%; overflow: hidden; color: var(--dsw-alias-label-secondary, #646a73); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
 .dshsk-rowActions { position: relative; flex: 0 0 auto; display: inline-flex; justify-content: flex-end; }
 .dshsk-listHead .dshsk-rowActions { text-align: right; }
@@ -60,7 +60,14 @@ const CSS = String.raw`
 .dshsk-editorHead { display: flex; align-items: flex-start; gap: 12px; }
 .dshsk-editorTitle { margin: 0; font-size: 16px; line-height: 24px; font-weight: 600; overflow-wrap: anywhere; }
 .dshsk-editorMeta { margin: 4px 0 0; color: var(--dsw-alias-label-secondary, #646a73); font-size: 12px; line-height: 18px; }
+.dshsk-page[data-mode="editor"] { overflow: hidden; }
+.dshsk-innerEditor { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .dshsk-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: stretch; min-height: 420px; }
+.dshsk-split[data-layout="single"] { grid-template-columns: minmax(0, 1fr); min-height: 0; flex: 1 1 auto; }
+.dshsk-editor[data-layout="compact"] { flex: 1 1 auto; min-height: 0; }
+.dshsk-editor[data-layout="compact"] .dshsk-split,
+.dshsk-editor[data-layout="compact"] .dshsk-pane { flex: 1 1 auto; min-height: 0; }
+.dshsk-editor[data-layout="compact"] .dshsk-textarea { flex: 1 1 auto; height: 100%; min-height: 0; resize: none; }
 @media (max-width: 900px) { .dshsk-split { grid-template-columns: minmax(0, 1fr); } }
 .dshsk-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--dsw-alias-border-l2, #dfe1e5); border-radius: 10px; overflow: hidden; background: var(--dsw-alias-bg-layer-1, #fff); }
 .dshsk-paneHead { padding: 7px 12px; border-bottom: 1px solid var(--dsw-alias-border-l1, #eef0f2); color: var(--dsw-alias-label-secondary, #646a73); font-size: 12px; line-height: 18px; background: var(--dsw-alias-bg-layer-2, #f7f8fa); }

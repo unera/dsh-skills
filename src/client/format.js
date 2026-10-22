@@ -3,22 +3,34 @@
  * middle truncation the path column uses.
  */
 
+/** Longest path shown in full; anything longer is cut in the middle. */
+export const PATH_BUDGET = 15;
+
+/** Characters kept at each end of a cut path. */
+export const PATH_EDGE = 7;
+
+/** The separator written between the two ends; three dots, not `…`. */
+const PATH_MARK = '...';
+
 /**
- * Truncate in the middle, keeping both ends readable.
+ * Shorten a path by keeping a fixed number of characters at each end.
  *
- * Paths matter at both ends (`interesting-youtube/SKILL.md`), so the middle is
- * what goes. The result never exceeds `limit` characters including the ellipsis.
- * @param value - text to shorten.
- * @param limit - maximum length; values at or below it are returned unchanged.
- * @returns the shortened text.
+ * The rule is deliberately not "half of the budget on each side": a path of 16
+ * characters keeps its first 7 and its last 7 around a literal `...`, which
+ * makes the result 17 characters long — the two ends are what stay readable
+ * (`split/pa...subpath/foo`), and the middle is what goes. A path that already
+ * fits in {@link PATH_BUDGET} is returned untouched, without any mark.
+ * @param value - the path to shorten.
+ * @param options - `budget` (15) and `edge` (7) for tests and callers that need
+ *   a different cut.
+ * @returns the text to render.
  */
-export function truncateMiddle(value, limit = 48) {
+export function truncatePath(value, { budget = PATH_BUDGET, edge = PATH_EDGE } = {}) {
   const text = String(value ?? '');
-  if (limit < 5 || text.length <= limit) return text;
-  const kept = limit - 1;
-  const head = Math.ceil(kept / 2);
-  const tail = kept - head;
-  return `${text.slice(0, head)}…${text.slice(text.length - tail)}`;
+  if (!Number.isInteger(edge) || edge < 0) throw new RangeError('edge must be a non-negative integer');
+  if (text.length <= budget) return text;
+  if (text.length <= edge * 2) return text;
+  return `${text.slice(0, edge)}${PATH_MARK}${text.slice(text.length - edge)}`;
 }
 
 /**

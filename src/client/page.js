@@ -9,7 +9,7 @@
 import * as React from 'react';
 import { api, ApiError } from './api.js';
 import { SkillEditor } from './editor.js';
-import { displayName, truncateMiddle } from './format.js';
+import { displayName, truncatePath } from './format.js';
 import { errorText } from './locales.js';
 import { ActionsMenu } from './menu.js';
 import { useNarrowViewport } from './viewport.js';
@@ -77,7 +77,7 @@ export function SkillRow({ t, skill, compact = false, onEdit, onDownloadMd, onDo
           h(
             'code',
             { className: 'dshsk-path', title: skill.path, 'aria-label': skill.path },
-            truncateMiddle(skill.path, 15),
+            truncatePath(skill.path),
           ),
         ),
     h(
@@ -259,14 +259,15 @@ export function SkillsPage({ t, client = api }) {
     }
     return h(
       'div',
-      { className: 'dshsk-page' },
+      { className: 'dshsk-page', 'data-mode': 'editor' },
       h(
         'div',
-        { className: 'dshsk-inner' },
+        { className: 'dshsk-inner dshsk-innerEditor' },
         noticeView,
         h(SkillEditor, {
           t,
           path: editor.path,
+          compact,
           initialContent: editor.content,
           warning: editor.warning,
           error: editor.error,

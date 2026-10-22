@@ -1,10 +1,15 @@
 /**
  * The full-page editor view inside the panel.
  *
- * Left: a plain monospace textarea, no highlighter. Right: the markdown
- * rendered live from the same state. The view owns only the draft; the page owns
- * reading, the on-disk conflict check, and writing, so Cancel can drop the draft
- * without a round trip and Save can report a refusal next to the text.
+ * Left: a plain monospace textarea, no highlighter. Right, on a wide screen: the
+ * markdown rendered live from the same state. On a narrow one there is no second
+ * column at all — a phone does not have the width for a preview beside the text,
+ * and a preview squeezed under it would push the buttons off the screen — so the
+ * textarea takes the whole width and height and Cancel/Save stay at the bottom.
+ *
+ * The view owns only the draft; the page owns reading, the on-disk conflict
+ * check, and writing, so Cancel can drop the draft without a round trip and Save
+ * can report a refusal next to the text.
  */
 import * as React from 'react';
 import { renderMarkdownBlock } from './markdown.js';
@@ -15,7 +20,7 @@ const h = React.createElement;
  * @param props - see {@link SkillEditor}.
  * @returns the editor view.
  */
-export function SkillEditor({ t, path, initialContent, onCancel, onSave, saving, warning, error }) {
+export function SkillEditor({ t, path, initialContent, onCancel, onSave, saving, warning, error, compact = false }) {
   const [content, setContent] = React.useState(initialContent ?? '');
   React.useEffect(() => setContent(initialContent ?? ''), [initialContent]);
 
@@ -24,7 +29,7 @@ export function SkillEditor({ t, path, initialContent, onCancel, onSave, saving,
 
   return h(
     'div',
-    { className: 'dshsk-editor' },
+    { className: 'dshsk-editor', 'data-layout': compact ? 'compact' : 'wide' },
     h(
       'div',
       { className: 'dshsk-editorHead' },
@@ -41,10 +46,10 @@ export function SkillEditor({ t, path, initialContent, onCancel, onSave, saving,
       : null,
     h(
       'div',
-      { className: 'dshsk-split' },
+      { className: 'dshsk-split', 'data-layout': compact ? 'single' : 'split' },
       h(
         'div',
-        { className: 'dshsk-pane' },
+        { className: 'dshsk-pane dshsk-paneEditor' },
         h('div', { className: 'dshsk-paneHead' }, path),
         h('textarea', {
           className: 'dshsk-textarea',
@@ -54,16 +59,18 @@ export function SkillEditor({ t, path, initialContent, onCancel, onSave, saving,
           onChange: (event) => setContent(event.target.value),
         }),
       ),
-      h(
-        'div',
-        { className: 'dshsk-pane' },
-        h('div', { className: 'dshsk-paneHead' }, t('editorPreview')),
-        h(
-          'div',
-          { className: 'dshsk-preview' },
-          renderMarkdownBlock(content, t('editorPreviewEmpty')),
-        ),
-      ),
+      compact
+        ? null
+        : h(
+            'div',
+            { className: 'dshsk-pane dshsk-panePreview' },
+            h('div', { className: 'dshsk-paneHead' }, t('editorPreview')),
+            h(
+              'div',
+              { className: 'dshsk-preview' },
+              renderMarkdownBlock(content, t('editorPreviewEmpty')),
+            ),
+          ),
     ),
     h(
       'div',

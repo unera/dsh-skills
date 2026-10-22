@@ -14,7 +14,7 @@ import TestRenderer, { act } from 'react-test-renderer';
 import { SkillEditor } from '../src/client/editor.js';
 import { SkillRow, SkillsPage } from '../src/client/page.js';
 import { renderMarkdown } from '../src/client/markdown.js';
-import { truncateMiddle } from '../src/client/format.js';
+import { truncatePath } from '../src/client/format.js';
 import { translate } from './helpers.mjs';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -129,6 +129,17 @@ function findByText(renderer, type, text) {
 }
 
 /**
+ * Find host nodes carrying one CSS class token.
+ * @param renderer - the renderer.
+ * @param name - the class name, without the dot.
+ * @returns the matching nodes.
+ */
+function byClass(renderer, name) {
+  const pattern = new RegExp(`(^|\\s)${name}(\\s|$)`);
+  return renderer.root.findAll((node) => typeof node.props.className === 'string' && pattern.test(node.props.className));
+}
+
+/**
  * The list rows, excluding the header row.
  * @param renderer - the renderer.
  * @returns the row instances.
@@ -196,12 +207,18 @@ test('the list renders a status dot, the name, the path, and one menu per row', 
     assert.equal(paths.length, 2);
     for (const path of paths) {
       const shown = textOf(path);
-      assert.ok(shown.length <= 15, `"${shown}" must be at most 15 characters`);
-      if (path.props.title.length > 15) assert.match(shown, /…/, 'a long path is cut in the middle');
+      assert.equal(shown, truncatePath(path.props.title));
+      assert.doesNotMatch(shown, /…/, 'the cut is three dots, never the … character');
+      if (path.props.title.length > 15) {
+        assert.equal(shown.length, 17, '7 characters, three dots, 7 characters');
+        assert.match(shown, /^.{7}\.\.\..{7}$/);
+      } else {
+        assert.equal(shown, path.props.title, 'a short path is shown as it is');
+      }
     }
     assert.equal(paths[0].props.title, SKILLS[0].path);
     assert.equal(paths[0].props['aria-label'], SKILLS[0].path);
-    assert.equal(textOf(paths[0]), truncateMiddle(SKILLS[0].path, 15));
+    assert.equal(textOf(paths[0]), SKILLS[0].path, '14 characters fit without a cut');
 
     // One ⋯ button per row.
     const more = renderer.root.findAll(
@@ -393,13 +410,33 @@ test('the markdown preview covers headings, emphasis, code, lists, links, and ta
   assert.equal(table.props.className, 'dshsk-tableWrap');
 });
 
-test('middle truncation keeps both ends and never exceeds the limit', () => {
-  const long = 'some/very/long/path/that/should/be/shortened/SKILL.md';
-  const short = truncateMiddle(long, 30);
-  assert.equal(short.length, 30);
-  assert.ok(short.startsWith('some/very/lo'));
-  assert.ok(short.endsWith('.md'));
-  assert.equal(truncateMiddle('short/path/SKILL.md', 40), 'short/path/SKILL.md');
+test('a path keeps exactly 7 characters at each end once it passes 15', () => {
+  // 14 and 15 characters are shown untouched.
+  const fourteen = 'abcdefg/hijklm';
+  const fifteen = 'abcdefg/hijklmn';
+  assert.equal(fourteen.length, 14);
+  assert.equal(fifteen.length, 15);
+  assert.equal(truncatePath(fourteen), fourteen);
+  assert.equal(truncatePath(fifteen), fifteen);
+
+  // 16 is the first length that gets cut: 7 + "..." + 7 = 17 characters.
+  const sixteen = 'abcdefg/hijklmno';
+  assert.equal(sixteen.length, 16);
+  const cut = truncatePath(sixteen);
+  assert.equal(cut, 'abcdefg...ijklmno');
+  assert.equal(cut.length, 17);
+  assert.equal(cut.slice(0, 7), sixteen.slice(0, 7), 'seven characters on the left');
+  assert.equal(cut.slice(-7), sixteen.slice(-7), 'seven characters on the right');
+  assert.equal(cut.slice(7, 10), '...', 'a literal three dots, not the … character');
+  assert.ok(!cut.includes('…'));
+
+  // A realistic path: the ends are what stay readable.
+  assert.equal(truncatePath('split/path/to/some/subpath/foo'), 'split/p...ath/foo');
+  assert.equal(truncatePath('interesting-youtube/SKILL.md'), 'interes...KILL.md');
+  assert.equal(truncatePath('subagent-worktrees/SKILL.md'), 'subagen...KILL.md');
+  // An explicit cut for a caller that needs a different budget.
+  assert.equal(truncatePath('abcdefghij', { budget: 5, edge: 2 }), 'ab...ij');
+  assert.throws(() => truncatePath('abc', { edge: -1 }), RangeError);
 });
 
 test('a compact row drops the path cell and keeps the full path in its accessible name', async () => {
@@ -416,7 +453,7 @@ test('a compact row drops the path cell and keeps the full path in its accessibl
     }),
   );
 
-  assert.equal(renderer.root.findAll((node) => node.props.className === 'dshsk-pathCell').length, 0);
+  assert.equal(byClass(renderer, 'dshsk-pathCell').length, 0);
   assert.equal(renderer.root.findAll((node) => node.type === 'code').length, 0);
 
   const name = renderer.root.findAll((node) => node.props.className === 'dshsk-name')[0];
@@ -449,7 +486,7 @@ test('at 360 px the page renders no path column at all', async () => {
       .map((node) => textOf(node));
     assert.deepEqual(header, ['Status', 'Skill', 'Actions'], 'the Path header goes with the column');
 
-    assert.equal(renderer.root.findAll((node) => node.props.className === 'dshsk-pathCell').length, 0);
+    assert.equal(byClass(renderer, 'dshsk-pathCell').length, 0);
     assert.equal(renderer.root.findAll((node) => node.type === 'code').length, 0);
 
     const rows = rowsOf(renderer);
@@ -477,9 +514,95 @@ test('without a media-query provider the page stays in the wide layout', async (
   try {
     const { client } = stubClient();
     const renderer = await render(h(SkillsPage, { t: translate, client }));
-    assert.equal(renderer.root.findAll((node) => node.props.className === 'dshsk-pathCell').length, 2);
+    assert.equal(byClass(renderer, 'dshsk-path').length, 2, 'one path per row, plus none in a header');
+    assert.equal(byClass(renderer, 'dshsk-pathCell').length, 3, 'two rows and the column header');
     assert.equal(rowsOf(renderer)[0].props['data-layout'], 'wide');
   } finally {
     if (previous !== undefined) globalThis.window = previous;
   }
+});
+
+test('the compact editor has no preview and gives the textarea the whole pane', async () => {
+  const renderer = await render(
+    h(SkillEditor, {
+      t: translate,
+      path: 'alpha/SKILL.md',
+      initialContent: '# Alpha\n',
+      compact: true,
+      saving: false,
+      onCancel: () => {},
+      onSave: () => {},
+    }),
+  );
+
+  assert.equal(byClass(renderer, 'dshsk-panePreview').length, 0);
+  assert.equal(byClass(renderer, 'dshsk-preview').length, 0);
+  assert.equal(byClass(renderer, 'dshsk-md').length, 0);
+  assert.equal(renderer.root.findAll((node) => node.type === 'textarea').length, 1);
+
+  const editor = byClass(renderer, 'dshsk-editor')[0];
+  assert.equal(editor.props['data-layout'], 'compact');
+  const split = byClass(renderer, 'dshsk-split')[0];
+  assert.equal(split.props['data-layout'], 'single', 'one column, not two');
+  assert.equal(byClass(renderer, 'dshsk-pane').length, 1, 'only the editor pane');
+
+  // Cancel and Save stay at the bottom, in that order.
+  const footer = byClass(renderer, 'dshsk-footer')[0];
+  const buttons = footer.findAll((node) => node.type === 'button').map((node) => textOf(node));
+  assert.deepEqual(buttons, ['Cancel', 'Save']);
+});
+
+test('the wide editor still renders the live preview beside the text', async () => {
+  const renderer = await render(
+    h(SkillEditor, {
+      t: translate,
+      path: 'alpha/SKILL.md',
+      initialContent: '# Alpha\n\n**bold**\n',
+      saving: false,
+      onCancel: () => {},
+      onSave: () => {},
+    }),
+  );
+
+  const split = byClass(renderer, 'dshsk-split')[0];
+  assert.equal(split.props['data-layout'], 'split');
+  assert.equal(byClass(renderer, 'dshsk-panePreview').length, 1);
+  assert.equal(byClass(renderer, 'dshsk-pane').length, 2, 'editor and preview');
+  const preview = byClass(renderer, 'dshsk-preview')[0];
+  assert.equal(textOf(preview), 'Alpha bold', 'the markdown is rendered, not shown as source');
+
+  const textarea = renderer.root.find((node) => node.type === 'textarea');
+  await act(async () => textarea.props.onChange({ target: { value: '# Beta\n' } }));
+  const previewAfter = byClass(renderer, 'dshsk-preview')[0];
+  assert.equal(textOf(previewAfter), 'Beta', 'the preview follows the text');
+});
+
+test('opening the editor at 360 px gives no preview, and at desktop width it does', async () => {
+  const openEditor = async (narrow) => {
+    const restore = stubViewport(narrow);
+    try {
+      const { client } = stubClient();
+      const renderer = await render(h(SkillsPage, { t: translate, client }));
+      const button = renderer.root.findAll(
+        (node) => node.type === 'button' && node.props['aria-haspopup'] === 'menu',
+      )[0];
+      await act(async () => button.props.onClick());
+      await act(async () => findByText(renderer, 'button', 'Edit SKILL.md').props.onClick());
+      return renderer;
+    } finally {
+      restore();
+    }
+  };
+
+  const narrow = await openEditor(true);
+  assert.equal(narrow.root.findAll((node) => node.type === 'textarea').length, 1);
+  assert.equal(byClass(narrow, 'dshsk-preview').length, 0);
+  const editor = byClass(narrow, 'dshsk-editor')[0];
+  assert.equal(editor.props['data-layout'], 'compact');
+  assert.equal(findByText(narrow, 'button', 'Save').props.disabled, true);
+
+  const wide = await openEditor(false);
+  assert.equal(byClass(wide, 'dshsk-preview').length, 1);
+  const wideEditor = byClass(wide, 'dshsk-editor')[0];
+  assert.equal(wideEditor.props['data-layout'], 'wide');
 });

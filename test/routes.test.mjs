@@ -35,7 +35,16 @@ before(async () => {
     installDir: install,
     skillsDir: 'skills',
     maxUploadBytes: MAX_UPLOAD,
-    provided: async () => [{ name: 'agent-profile-p-abcd', description: 'preset', provider: 'agent-preset' }],
+    provided: async () => [
+      { name: 'agent-profile-p-abcd', description: 'preset', provider: 'agent-preset' },
+      { name: 'agent-profile-empty', description: 'blank preset', provider: 'agent-preset' },
+    ],
+    providedContent: async (name) =>
+      name === 'agent-profile-p-abcd'
+        ? '---\nname: agent-profile-p-abcd\n---\n\n# Preset body\n'
+        : name === 'agent-profile-empty'
+          ? ''
+          : undefined,
   });
   server = createServer((request, response) => route.handler(request, response));
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -70,6 +79,7 @@ test('GET /skills returns our skills, packaged skills, and the virtual one', asy
       ['user:home:skills/beta', 'user', 'disabled'],
       ['plugin:install:node_modules/@scope/tools/assets/office', 'plugin', 'active'],
       ['virtual:agent-profile-p-abcd', 'virtual', 'virtual'],
+      ['virtual:agent-profile-empty', 'virtual', 'virtual'],
     ],
   );
   assert.deepEqual(body.roots.map((root) => root.key), ['home', 'install']);
@@ -88,11 +98,28 @@ test('GET /skill/<id> reads our file and the packaged one', async () => {
   assert.match((await bundled.json()).content, /name: office/);
 });
 
-test('a virtual row has no file, and an unknown id is not-found', async () => {
+test('a virtual row serves its content from the provider, empty or not', async () => {
   const virtual = await call(`/skill/${encodeURIComponent('virtual:agent-profile-p-abcd')}`);
-  assert.equal(virtual.status, 404);
-  assert.equal((await virtual.json()).code, 'not-found');
+  assert.equal(virtual.status, 200);
+  const body = await virtual.json();
+  assert.equal(body.fileName, null);
+  assert.equal(body.readOnly, true);
+  assert.match(body.content, /# Preset body/);
 
+  const blank = await call(`/skill/${encodeURIComponent('virtual:agent-profile-empty')}`);
+  assert.equal(blank.status, 200);
+  assert.equal((await blank.json()).content, '', 'an empty body is content, not a missing skill');
+
+  const md = await call(`/skill/${encodeURIComponent('virtual:agent-profile-p-abcd')}/download.md`);
+  assert.equal(md.status, 200);
+  assert.match(await md.text(), /# Preset body/);
+
+  const zip = await call(`/skill/${encodeURIComponent('virtual:agent-profile-p-abcd')}/download.zip`);
+  assert.equal(zip.status, 404, 'a virtual skill has no directory to archive');
+  assert.equal((await zip.json()).code, 'not-found');
+});
+
+test('an unknown id is not-found', async () => {
   const unknown = await call(`/skill/${encodeURIComponent('user:home:skills/nope')}`);
   assert.equal(unknown.status, 404);
   assert.equal((await unknown.json()).code, 'not-found');

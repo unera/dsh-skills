@@ -26,6 +26,7 @@ export type SkillOrigin = 'user' | 'plugin' | 'virtual';
 
 /** Actions the host is willing to perform for one row. */
 export type SkillAction =
+  | 'view'
   | 'edit'
   | 'rename'
   | 'upload'
@@ -240,14 +241,21 @@ function displayPath(target: string, home: string, packageDir?: string): string 
 
 /** Actions available for one summary of our own skills. */
 function userActions(summary: SkillSummary): SkillAction[] {
-  const actions: SkillAction[] = ['edit', 'rename', 'upload', 'downloadMd', 'downloadZip'];
+  const actions: SkillAction[] = ['view', 'edit', 'rename', 'upload', 'downloadMd', 'downloadZip'];
   if (summary.status === 'active') actions.push('disable');
   if (summary.status === 'disabled') actions.push('enable');
   return actions;
 }
 
 /** Actions available for a packaged skill: read and download, never write. */
-const PACKAGE_ACTIONS: readonly SkillAction[] = ['downloadMd', 'downloadZip'];
+const PACKAGE_ACTIONS: readonly SkillAction[] = ['view', 'downloadMd', 'downloadZip'];
+
+/**
+ * Actions for a skill a provider supplies: its text can be read (from the
+ * provider, since there is no file we own) and downloaded as markdown, but there
+ * is no directory to archive and nothing to write.
+ */
+const PROVIDED_ACTIONS: readonly SkillAction[] = ['view', 'downloadMd'];
 
 /** How long a package scan is reused; packaged skills never change under us. */
 const PACKAGE_TTL_MS = 30_000;
@@ -389,7 +397,7 @@ export function collectSkills(options: CatalogOptions): SkillRow[] {
         mtimeMs: 0,
         presentFiles: [],
         packageName: provided.provider,
-        actions: [],
+        actions: PROVIDED_ACTIONS,
       });
       continue;
     }
@@ -409,7 +417,7 @@ export function collectSkills(options: CatalogOptions): SkillRow[] {
       mtimeMs: 0,
       presentFiles: [],
       packageName: provided.provider,
-      actions: [],
+      actions: PROVIDED_ACTIONS,
     });
   }
 

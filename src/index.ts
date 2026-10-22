@@ -44,7 +44,10 @@ interface HostContext {
   webServer?: { register(route: WebRoute): () => void };
   effect?: (run: () => void | (() => void), label?: string) => void;
   logger?: { info?: (message: string) => void; warn?: (message: string) => void };
-  skills?: { list(options?: { cwd?: string }): Promise<readonly ProvidedSkill[]> };
+  skills?: {
+    list(options?: { cwd?: string }): Promise<readonly ProvidedSkill[]>;
+    get(name: string, options?: { cwd?: string }): Promise<{ content?: string } | undefined>;
+  };
   get?: (name: string) => unknown;
 }
 
@@ -92,9 +95,11 @@ export function apply(ctx: HostContext, config: Config = {}): void {
   // The provider's list is a bonus, not a dependency: a host without the service
   // still gets the two file-backed sets, and a failing provider must not take the
   // page down with it.
+  const skillsService = () =>
+    typeof ctx.get === 'function' ? (ctx.get('skills') as HostContext['skills']) : ctx.skills;
+
   const provided = async (): Promise<ProvidedSkill[]> => {
-    const service =
-      typeof ctx.get === 'function' ? (ctx.get('skills') as HostContext['skills']) : ctx.skills;
+    const service = skillsService();
     if (typeof service?.list !== 'function') return [];
     const skills = await service.list({ cwd: process.cwd() });
     return skills.map((skill) => ({
@@ -106,12 +111,22 @@ export function apply(ctx: HostContext, config: Config = {}): void {
     }));
   };
 
+  // A provider skill has no file, so its body is the only thing the page can
+  // show; `get()` is the registry's own read for exactly that.
+  const providedContent = async (name: string): Promise<string | undefined> => {
+    const service = skillsService();
+    if (typeof service?.get !== 'function') return undefined;
+    const skill = await service.get(name, { cwd: process.cwd() });
+    return typeof skill?.content === 'string' ? skill.content : undefined;
+  };
+
   const routes = createRoutes({
     home,
     installDir,
     skillsDir: settings.skillsDir,
     maxUploadBytes: settings.maxUploadBytes,
     provided,
+    providedContent,
     logger,
   });
 

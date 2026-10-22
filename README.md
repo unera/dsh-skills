@@ -10,14 +10,15 @@ The list is three sections, each with its own heading, count, and empty state:
 
 | Section | Where it comes from | Colours | Actions |
 | --- | --- | --- | --- |
-| **Standard skills in `$DSH_HOME/skills`** | our own directories | green dot when active, grey when disabled, normal name colour | everything: edit, rename, upload, both downloads, enable/disable |
-| **Skills bundled with plugins** | `<pkg>/skills/*` and `<pkg>/assets/*` of every installed package, found through their manifests | pink dot and pink name when active, grey-pink when disabled | download only — they live in `node_modules` |
-| **Provided by plugins (no file)** | `ctx.skills.list()` entries with no file on disk | pink, dashed dot | none |
+| **Standard skills in `$DSH_HOME/skills`** | our own directories | green dot when active, grey when disabled, normal name colour | everything: view, edit, rename, upload, both downloads, enable/disable |
+| **Skills bundled with plugins** | `<pkg>/skills/*` and `<pkg>/assets/*` of every installed package, found through their manifests | pink dot and pink name when active, grey-pink when disabled | view and both downloads — they live in `node_modules` |
+| **Provided by plugins (no file)** | `ctx.skills.list()` entries with no file on disk | pink, dashed dot | view and `Download SKILL.md`; no ZIP, because there is no directory to archive |
 
 - **Status** is one 11px dot: green for `SKILL.md`, grey for `_SKILL.md` (ours); pink for an active packaged skill, grey-pink for a disabled one. A directory holding both files is reported as a conflict, in red. The word lives in the dot's tooltip and accessible name, not in the row.
 - **Name** takes every pixel the row has left, with the frontmatter `description` underneath; both are cut with an ellipsis, never wrapped.
 - **Path** is relative to `$DSH_HOME` when it is inside it, otherwise relative to the package; shown in full up to 15 characters and, past that, as its first 7 and last 7 around three dots (`split/p...ath/foo`). The full path is in the tooltip. Below 640px the column is not rendered at all and the row keeps the path in its accessible name.
-- **Row menu** — `Edit`, `Rename`, `Download SKILL.md`, `Download ZIP`, `Upload`, `Enable`/`Disable`, in that order, separated into groups. On a wide screen the first action is also reachable from the split button: a pencil that opens the editor plus a chevron for the menu. On a narrow one there is a single `⋯` and Edit is the first item.
+- **View** — the first item in every row's menu, for all three sections. It opens the same full-page frame as the editor but read-only: the raw text, no `textarea`, no `Save`, a `Read-only` badge, `Close` back to the list, and `Edit` beside it when the skill may be edited. Nothing is rendered — no markdown, no highlighting — and nothing can be written from it. A provider skill's text comes from `ctx.skills.get(name)`; if it returns an empty body the page says *content is not available for this skill* rather than showing a blank screen.
+- **Row menu** — `View`, `Edit`, `Rename`, `Download SKILL.md`, `Download ZIP`, `Upload`, `Enable`/`Disable`, in that order, separated into groups. On a wide screen the first action is also reachable from the split button: a pencil that opens the editor plus a chevron for the menu. On a narrow one there is a single `⋯` and Edit is the first item.
 - **Edit** — a full-page view inside the panel (not a dialog, not a URL): one plain monospace `textarea` filling the panel, `Cancel` and `Save` at the bottom. There is no preview at any width. `Save` stays disabled until something changes; a file that changed on disk after it was opened raises a warning before the first save, and the second press overwrites.
 - **Rename** — renames the skill's *directory* (never the frontmatter `name`), inline, with the current name prefilled, kebab-case validation, and an atomic `rename()` inside the same parent. A name that is already taken is refused, and a failure leaves the original directory untouched.
 - **Enable / Disable** — the harness' own switch: `SKILL.md` → `_SKILL.md` and back. After the rename the row updates in place (dot, path, menu) and a notice says exactly what happened on disk: `File SKILL.md renamed to _SKILL.md`.
@@ -88,7 +89,7 @@ One prefix route, `/dsh-skills/api`, JSON with a `code` the client localizes:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/skills` | home, roots, and every row with its `actions` |
-| `GET` | `/skill/<id>` | one file: name, contents, `mtimeMs`, status |
+| `GET` | `/skill/<id>` | the text: a file's contents, or a provider skill's body from `ctx.skills.get()` |
 | `PUT` | `/skill/<id>` | `{content}` → writes atomically, preserves mode and status |
 | `POST` | `/skill/<id>/enable` · `/disable` | rename the file, the harness' own switch |
 | `POST` | `/skill/<id>/rename` | `{name}` → rename the directory inside its parent |
@@ -122,7 +123,7 @@ npm test            # builds both halves, then runs the node:test suites
 npm run build       # lib/index.js + lib/host/*.js, and the wrapped lib/client.js
 ```
 
-Tests (93): frontmatter parsing; our own and packaged scanning, including the both-files conflict and the symlink rules; the ZIP reader and writer; both upload contracts with byte-identical trees after every refusal; the catalog's three origins, deduplication and display paths; the routes through a real HTTP server, including `read-only`, `already-exists`, `conflict`, and rename; and the client — three sections, dot/name colours, menu order, split versus single control, enable/disable notices, rename with validation and in-place update, the editor with no preview, the icon, and both dictionaries.
+Tests (99): frontmatter parsing; our own and packaged scanning, including the both-files conflict and the symlink rules; the ZIP reader and writer; both upload contracts with byte-identical trees after every refusal; the catalog's three origins, deduplication and display paths; the routes through a real HTTP server, including `read-only`, `already-exists`, `conflict`, and rename; and the client — three sections, dot/name colours, menu order, split versus single control, the read-only view (no textarea, no Save, `Close`/`Edit`, empty content), enable/disable notices, rename with validation and in-place update, the editor with no preview, the icon, and both dictionaries.
 
 ## License
 

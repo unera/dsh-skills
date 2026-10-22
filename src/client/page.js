@@ -16,6 +16,7 @@
 import * as React from 'react';
 import { api, ApiError } from './api.js';
 import { SkillEditor } from './editor.js';
+import { SkillViewer } from './viewer.js';
 import { displayName, truncatePath } from './format.js';
 import { errorText } from './locales.js';
 import { RowActions, SEPARATOR } from './menu.js';
@@ -83,6 +84,7 @@ export function SkillRow({
   t,
   row,
   compact = false,
+  onView,
   onEdit,
   onRename,
   renaming = null,
@@ -98,6 +100,7 @@ export function SkillRow({
   const hint = statusHint(t, row);
   const meta = metaText(t, row);
   const actions = row.actions ?? [];
+  const canView = actions.includes('view');
   const canEdit = actions.includes('edit');
   const canRename = actions.includes('rename');
   const canDownloadMd = actions.includes('downloadMd');
@@ -107,7 +110,14 @@ export function SkillRow({
   const canEnable = actions.includes('enable');
 
   const groups = [];
-  if (canEdit) groups.push([{ id: 'edit', label: t('edit'), onSelect: () => onEdit(row) }]);
+  // View and Edit are one group: both answer "let me read this", and View is
+  // first so the safe action is the one under the thumb.
+  const reader = [];
+  if (canView) {
+    reader.push({ id: 'view', label: t('view'), hint: t('viewTitle', { name }), onSelect: () => onView(row) });
+  }
+  if (canEdit) reader.push({ id: 'edit', label: t('edit'), onSelect: () => onEdit(row) });
+  if (reader.length > 0) groups.push(reader);
   if (canRename) {
     groups.push([{ id: 'rename', label: t('rename'), hint: t('renameTitle'), onSelect: () => onRename(row) }]);
   }
@@ -391,15 +401,54 @@ export function SkillsPage({ t, client = api }) {
     if (input.current !== null && typeof input.current.click === 'function') input.current.click();
   }, []);
 
+  const loadContent = React.useCallback(
+    async (row) => {
+      setNotice(null);
+      try {
+        const file = await client.read(row.id);
+        return { fileName: file.fileName ?? null, content: file.content ?? '', mtimeMs: file.mtimeMs ?? 0 };
+      } catch (error) {
+        const code = error instanceof ApiError ? error.code : 'not-found';
+        setNotice({ tone: 'error', text: `${t('editorOpenFailed', { dir: row.dir })} ${errorText(t, code)}` });
+        return null;
+      }
+    },
+    [client, t],
+  );
+
+  const openViewer = React.useCallback(
+    async (row) => {
+      setEditor({ phase: 'loading', mode: 'view', path: pathOf(row), name: displayName(row), row });
+      const loaded = await loadContent(row);
+      if (loaded === null) {
+        setEditor(null);
+        return;
+      }
+      setEditor({
+        phase: 'ready',
+        mode: 'view',
+        id: row.id,
+        row,
+        name: displayName(row),
+        path: row.path === '' ? '' : `${row.dir}/${loaded.fileName ?? ''}`.replace(/\/$/, ''),
+        content: loaded.content,
+      });
+    },
+    [loadContent],
+  );
+
   const openEditor = React.useCallback(
     async (row) => {
       setNotice(null);
-      setEditor({ phase: 'loading', path: pathOf(row) });
+      setEditor({ phase: 'loading', mode: 'edit', path: pathOf(row), name: displayName(row), row });
       try {
         const file = await client.read(row.id);
         setEditor({
           phase: 'ready',
+          mode: 'edit',
           id: row.id,
+          row,
+          name: displayName(row),
           path: `${row.dir}/${file.fileName}`,
           content: file.content,
           mtimeMs: file.mtimeMs,
@@ -582,6 +631,28 @@ export function SkillsPage({ t, client = api }) {
         ),
       );
     }
+    if (editor.mode === 'view') {
+      const row = editor.row;
+      const editable = Array.isArray(row?.actions) && row.actions.includes('edit');
+      return h(
+        'div',
+        { className: 'dshsk-page', 'data-mode': 'editor' },
+        h(
+          'div',
+          { className: 'dshsk-inner dshsk-innerEditor' },
+          noticeView,
+          h(SkillViewer, {
+            t,
+            name: editor.name,
+            path: editor.path,
+            content: editor.content,
+            editable,
+            onClose: () => setEditor(null),
+            onEdit: () => openEditor(row),
+          }),
+        ),
+      );
+    }
     return h(
       'div',
       { className: 'dshsk-page', 'data-mode': 'editor' },
@@ -661,6 +732,7 @@ export function SkillsPage({ t, client = api }) {
               rows: list.skills.filter(section.includes),
               compact,
               callbacks: {
+                onView: openViewer,
                 onEdit: openEditor,
                 onRename: startRename,
                 renaming,

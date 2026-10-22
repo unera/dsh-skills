@@ -29,8 +29,8 @@ test('our own skills are editable rows with a path relative to the home', (t) =>
       ['user:home:skills/paused', 'user', 'disabled', 'skills/paused/_SKILL.md'],
     ],
   );
-  assert.deepEqual(rows[0].actions, ['edit', 'rename', 'upload', 'downloadMd', 'downloadZip', 'disable']);
-  assert.deepEqual(rows[1].actions, ['edit', 'rename', 'upload', 'downloadMd', 'downloadZip', 'enable']);
+  assert.deepEqual(rows[0].actions, ['view', 'edit', 'rename', 'upload', 'downloadMd', 'downloadZip', 'disable']);
+  assert.deepEqual(rows[1].actions, ['view', 'edit', 'rename', 'upload', 'downloadMd', 'downloadZip', 'enable']);
   assert.equal(rows[0].readOnly, false);
 });
 
@@ -49,7 +49,7 @@ test('a packaged skill is read-only, with downloads as its only actions', (t) =>
   assert.equal(row.packageName, '@scope/tools');
   // Outside the home, so the display path is relative to the package.
   assert.equal(row.path, 'assets/office/SKILL.md');
-  assert.deepEqual(row.actions, ['downloadMd', 'downloadZip']);
+  assert.deepEqual(row.actions, ['view', 'downloadMd', 'downloadZip']);
 });
 
 test('a package inside a profile shows a path relative to the home', (t) => {
@@ -65,7 +65,7 @@ test('a package inside a profile shows a path relative to the home', (t) => {
   assert.equal(row.path, 'profiles/web/node_modules/@scope/tools/skills/profile-skill/SKILL.md');
 });
 
-test('a provider-only skill is a virtual row with no actions and no file', (t) => {
+test('a provider-only skill is a virtual row: view and a markdown download, no zip', (t) => {
   const home = makeRoot();
   t.after(() => dropRoot(home));
   const rows = collectSkills({
@@ -77,7 +77,7 @@ test('a provider-only skill is a virtual row with no actions and no file', (t) =
   assert.equal(row.status, 'virtual');
   assert.equal(row.path, '');
   assert.equal(row.fileName, null);
-  assert.deepEqual(row.actions, []);
+  assert.deepEqual(row.actions, ['view', 'downloadMd'], 'no directory to archive, nothing to write');
   assert.equal(row.description, 'preset');
 });
 
@@ -116,7 +116,7 @@ test('a provider skill with a file outside our roots is listed read-only', (t) =
   const [row] = rows;
   assert.equal(row.origin, 'plugin');
   assert.equal(row.readOnly, true);
-  assert.deepEqual(row.actions, []);
+  assert.deepEqual(row.actions, ['view', 'downloadMd']);
   assert.equal(row.path, 'project/local-skill/SKILL.md');
 });
 

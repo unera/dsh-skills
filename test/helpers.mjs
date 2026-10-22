@@ -140,7 +140,7 @@ export function row(overrides = {}) {
     size: 120,
     mtimeMs: 1000,
     presentFiles: ['SKILL.md'],
-    actions: ['edit', 'rename', 'upload', 'downloadMd', 'downloadZip', 'disable'],
+    actions: ['view', 'edit', 'rename', 'upload', 'downloadMd', 'downloadZip', 'disable'],
     ...overrides,
   };
 }

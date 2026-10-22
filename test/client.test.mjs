@@ -33,7 +33,7 @@ const USER_B = row({
   description: null,
   status: 'disabled',
   fileName: '_SKILL.md',
-  actions: ['edit', 'rename', 'upload', 'downloadMd', 'downloadZip', 'enable'],
+  actions: ['view', 'edit', 'rename', 'upload', 'downloadMd', 'downloadZip', 'enable'],
 });
 const PLUGIN = row({
   id: 'plugin:install:node_modules/pkg/assets/office',
@@ -45,7 +45,7 @@ const PLUGIN = row({
   description: 'bundled office',
   status: 'active',
   packageName: 'pkg',
-  actions: ['downloadMd', 'downloadZip'],
+  actions: ['view', 'downloadMd', 'downloadZip'],
 });
 const VIRTUAL = row({
   id: 'virtual:agent-profile-p-1',
@@ -57,7 +57,7 @@ const VIRTUAL = row({
   description: null,
   status: 'virtual',
   fileName: null,
-  actions: [],
+  actions: ['view', 'downloadMd'],
 });
 
 /**
@@ -322,6 +322,7 @@ test('the wide row menu is ordered Edit, downloads, Upload, Enable/Disable with 
       child.props.role === 'separator' ? '---' : textOf(child),
     );
     assert.deepEqual(labels, [
+      'View',
       'Edit',
       '---',
       'Rename',
@@ -341,7 +342,7 @@ test('the wide row menu is ordered Edit, downloads, Upload, Enable/Disable with 
   }
 });
 
-test('a packaged row offers downloads only, and a virtual one offers nothing', async () => {
+test('a packaged row offers view and downloads, a virtual one view and a markdown download', async () => {
   const { client } = stubClient();
   const renderer = await render(h(SkillsPage, { t: translate, client }));
   const rows = rowsOf(renderer);
@@ -355,14 +356,20 @@ test('a packaged row offers downloads only, and a virtual one offers nothing', a
   const packagedLabels = packagedMenu.children
     .filter((child) => child && typeof child === 'object' && child.props.role !== 'separator')
     .map((child) => textOf(child));
-  assert.deepEqual(packagedLabels, ['Download SKILL.md', 'Download ZIP']);
+  assert.deepEqual(packagedLabels, ['View', 'Download SKILL.md', 'Download ZIP']);
   await act(async () => packagedToggle.props.onClick());
 
-  // The virtual row has no button at all, and says why.
-  assert.equal(
-    rows[3].findAll((node) => node.type === 'button' && node.props['aria-haspopup'] === 'menu').length,
-    0,
+  // The virtual row has a menu, with View and the markdown download only.
+  const virtualToggle = rows[3].find(
+    (node) => node.type === 'button' && node.props['aria-haspopup'] === 'menu',
   );
+  await act(async () => virtualToggle.props.onClick());
+  const virtualMenu = renderer.root.find((node) => node.props.role === 'menu');
+  assert.deepEqual(
+    virtualMenu.findAll((node) => node.type === 'button').map((child) => textOf(child)),
+    ['View', 'Download SKILL.md'],
+  );
+  await act(async () => virtualToggle.props.onClick());
   assert.match(textOf(rows[3]), /Provided by a plugin, no file/);
 });
 
@@ -377,7 +384,7 @@ test('a wide row with an editor gets a split control; a narrow one gets a single
     assert.equal(primary.props['aria-label'], 'Edit SKILL.md');
     assert.ok(first.find((node) => node.props.className === 'dshsk-splitToggle'));
     assert.equal(first.findAll((node) => node.props.className === 'dshsk-more').length, 0, 'no plain ⋯ on a split row');
-    assert.equal(byClass(renderer, 'dshsk-more').length, 1, 'the packaged row keeps its single button');
+    assert.equal(byClass(renderer, 'dshsk-more').length, 2, 'the packaged and provider rows keep a single button');
 
     await act(async () => primary.props.onClick());
     assert.deepEqual(calls.at(-1), ['read', 'user:home:skills/alpha']);
@@ -393,7 +400,7 @@ test('at 360 px the row drops the split and keeps Edit first in the menu', async
     const { client } = stubClient();
     const renderer = await render(h(SkillsPage, { t: translate, client }));
     assert.equal(byClass(renderer, 'dshsk-splitActions').length, 0);
-    assert.equal(byClass(renderer, 'dshsk-more').length, 3, 'one per actionable row, the packaged one included');
+    assert.equal(byClass(renderer, 'dshsk-more').length, 4, 'every row has a menu in the compact layout');
 
     const toggle = rowsOf(renderer)[0].find(
       (node) => node.type === 'button' && node.props['aria-haspopup'] === 'menu',
@@ -401,7 +408,7 @@ test('at 360 px the row drops the split and keeps Edit first in the menu', async
     await act(async () => toggle.props.onClick());
     const menu = renderer.root.find((node) => node.props.role === 'menu');
     const first = menu.children.find((child) => child && typeof child === 'object');
-    assert.equal(textOf(first), 'Edit');
+    assert.equal(textOf(first), 'View');
   } finally {
     restore();
   }
@@ -650,6 +657,7 @@ test('Rename is in the menu for our skills, and absent for packaged ones', async
     .findAll((node) => node.type === 'button')
     .map((node) => textOf(node));
   assert.deepEqual(labels, [
+    'View',
     'Edit',
     'Rename',
     'Download SKILL.md',
@@ -751,4 +759,108 @@ test('a refused rename is shown in the form and the row keeps its name', async (
   // Cancel closes the form without a call.
   await act(async () => findByText(renderer, 'button', 'Cancel').props.onClick());
   assert.equal(byClass(renderer, 'dshsk-rename').length, 0);
+});
+
+test('View opens a read-only page with no textarea and no Save, and Close returns', async () => {
+  const { client, calls } = stubClient();
+  const renderer = await render(h(SkillsPage, { t: translate, client }));
+
+  const toggle = rowsOf(renderer)[0].find(
+    (node) => node.type === 'button' && node.props['aria-haspopup'] === 'menu',
+  );
+  await act(async () => toggle.props.onClick());
+  await act(async () => findByText(renderer, 'button', 'View').props.onClick());
+
+  assert.deepEqual(calls.filter(([name]) => name === 'read'), [['read', 'user:home:skills/alpha']]);
+  assert.equal(byClass(renderer, 'dshsk-viewer').length, 1);
+  assert.equal(renderer.root.findAll((node) => node.type === 'textarea').length, 0, 'nothing to type into');
+  const labels = renderer.root.findAll((node) => node.type === 'button').map((node) => textOf(node));
+  assert.ok(!labels.includes('Save'), 'a read-only view cannot save');
+  assert.ok(labels.includes('Close'));
+  assert.ok(labels.includes('Edit'), 'an editable skill offers the way into the editor');
+
+  const content = byClass(renderer, 'dshsk-content')[0];
+  assert.match(textOf(content), /# Alpha/);
+  assert.match(textOf(renderer.root), /Read-only/);
+
+  // Close goes back to the list and nothing was written.
+  await act(async () => findByText(renderer, 'button', 'Close').props.onClick());
+  assert.equal(byClass(renderer, 'dshsk-viewer').length, 0);
+  assert.equal(calls.some(([name]) => name === 'save'), false);
+});
+
+test('the viewer of a read-only skill has no Edit, and shows the read-only badge', async () => {
+  const { client } = stubClient();
+  const renderer = await render(h(SkillsPage, { t: translate, client }));
+  const rows = rowsOf(renderer);
+  const packagedToggle = rows[2].find(
+    (node) => node.type === 'button' && node.props['aria-haspopup'] === 'menu',
+  );
+  await act(async () => packagedToggle.props.onClick());
+  await act(async () => findByText(renderer, 'button', 'View').props.onClick());
+
+  const labels = renderer.root.findAll((node) => node.type === 'button').map((node) => textOf(node));
+  assert.deepEqual(labels, ['Close'], 'only Close: no edit, no save');
+  assert.match(textOf(renderer.root), /Read-only/);
+  assert.equal(byClass(renderer, 'dshsk-viewer').length, 1);
+});
+
+test('a virtual skill shows the content the provider returned', async () => {
+  const reads = [];
+  const { client } = stubClient({
+    read: async (id) => {
+      reads.push(id);
+      return {
+        dir: id,
+        fileName: null,
+        content: '# Agent profile\n\npreset text\n',
+        mtimeMs: 0,
+        status: 'virtual',
+        readOnly: true,
+      };
+    },
+  });
+  const renderer = await render(h(SkillsPage, { t: translate, client }));
+  const rows = rowsOf(renderer);
+  const virtualToggle = rows[3].find(
+    (node) => node.type === 'button' && node.props['aria-haspopup'] === 'menu',
+  );
+  await act(async () => virtualToggle.props.onClick());
+  await act(async () => findByText(renderer, 'button', 'View').props.onClick());
+
+  assert.deepEqual(reads, ['virtual:agent-profile-p-1']);
+  assert.match(textOf(byClass(renderer, 'dshsk-content')[0]), /preset text/);
+  assert.deepEqual(
+    renderer.root.findAll((node) => node.type === 'button').map((node) => textOf(node)),
+    ['Close'],
+  );
+});
+
+test('empty content says so instead of showing a blank page', async () => {
+  const { client } = stubClient({
+    read: async (id) => ({ dir: id, fileName: null, content: '', mtimeMs: 0, status: 'virtual', readOnly: true }),
+  });
+  const renderer = await render(h(SkillsPage, { t: translate, client }));
+  const virtualToggle = rowsOf(renderer)[3].find(
+    (node) => node.type === 'button' && node.props['aria-haspopup'] === 'menu',
+  );
+  await act(async () => virtualToggle.props.onClick());
+  await act(async () => findByText(renderer, 'button', 'View').props.onClick());
+  assert.match(textOf(byClass(renderer, 'dshsk-contentEmpty')[0]), /Content is not available for this skill/);
+});
+
+test('View is the first item in all three sections', async () => {
+  const { client } = stubClient();
+  const renderer = await render(h(SkillsPage, { t: translate, client }));
+  const rows = rowsOf(renderer);
+  for (const index of [0, 2, 3]) {
+    const toggle = rows[index].find(
+      (node) => node.type === 'button' && node.props['aria-haspopup'] === 'menu',
+    );
+    await act(async () => toggle.props.onClick());
+    const menu = renderer.root.find((node) => node.props.role === 'menu');
+    const first = menu.children.find((child) => child && typeof child === 'object');
+    assert.equal(textOf(first), 'View', `row ${index} starts with View`);
+    await act(async () => toggle.props.onClick());
+  }
 });

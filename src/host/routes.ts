@@ -205,6 +205,8 @@ export interface RouteContext {
   readonly maxUploadBytes: number;
   /** Provider-supplied skills; failures are swallowed into an empty list. */
   readonly provided?: (() => Promise<ProvidedSkill[]>) | undefined;
+  /** Body of a provider-supplied skill, by name; undefined when the provider has none. */
+  readonly providedContent?: ((name: string) => Promise<string | undefined>) | undefined;
   /** Optional logger for refusals worth keeping. */
   readonly logger?: { warn?: (message: string) => void; info?: (message: string) => void };
 }
@@ -246,6 +248,35 @@ async function loadRows(context: RouteContext): Promise<SkillRow[]> {
     }
   }
   return collectSkills({ home: context.home, installDir: context.installDir, provided });
+}
+
+/**
+ * The text of one row, from the file when it has one and from the provider when
+ * it does not.
+ * @param context - route state.
+ * @param row - the resolved row.
+ * @param id - the row id, for the file-backed branch.
+ * @returns the content, its file name (null for a provider skill), and the
+ *   modification time when there is a file.
+ * @throws {PathRefused} with `not-found` when a provider row has no content.
+ */
+async function contentOf(
+  context: RouteContext,
+  row: SkillRow,
+  id: string,
+): Promise<{ fileName: string | null; content: string; mtimeMs: number; status: string; readOnly: boolean }> {
+  if (row.fileName === null) {
+    if (typeof context.providedContent !== 'function') {
+      throw new PathRefused(`Skill "${row.dir}" has no content source`, 'not-found');
+    }
+    const content = await context.providedContent(row.name ?? row.dir);
+    if (content === undefined) {
+      throw new PathRefused(`The provider no longer knows skill "${row.dir}"`, 'not-found');
+    }
+    return { fileName: null, content, mtimeMs: 0, status: row.status, readOnly: true };
+  }
+  const file = readSkillFile(directoryBase(context, id), relativeOf(id), pathOptions(id));
+  return { fileName: file.fileName, content: file.content, mtimeMs: file.mtimeMs, status: file.status, readOnly: row.readOnly };
 }
 
 /**
@@ -329,11 +360,8 @@ async function handle(context: RouteContext, request: IncomingMessage, response:
       if (action === '' && method === 'GET') {
         const rows = await loadRows(context);
         const row = resolveRow(rows, id);
-        if (row.fileName === null) {
-          return sendError(response, 'not-found', `Skill "${row.dir}" has no file to read`);
-        }
-        const file = readSkillFile(directoryBase(context, id), relativeOf(id), pathOptions(id));
-        return sendJson(response, 200, file);
+        const content = await contentOf(context, row, id);
+        return sendJson(response, 200, { dir: row.dir, ...content });
       }
       if (action === '' && method === 'PUT') {
         const body = await readBody(request, MAX_SAVE_BYTES);
@@ -379,11 +407,9 @@ async function handle(context: RouteContext, request: IncomingMessage, response:
       if (action === 'download.md' && method === 'GET') {
         const rows = await loadRows(context);
         const row = resolveRow(rows, id);
-        if (row.fileName === null) {
-          return sendError(response, 'not-found', `Skill "${row.dir}" has no file to download`);
-        }
-        const file = readSkillFile(directoryBase(context, id), relativeOf(id), pathOptions(id));
-        return sendFile(response, Buffer.from(file.content, 'utf8'), file.fileName, 'text/markdown; charset=utf-8');
+        const content = await contentOf(context, row, id);
+        const fileName = content.fileName ?? `${row.name ?? row.dir}.md`;
+        return sendFile(response, Buffer.from(content.content, 'utf8'), fileName, 'text/markdown; charset=utf-8');
       }
       if (action === 'download.zip' && method === 'GET') {
         const archive = zipSkill(directoryBase(context, id), relativeOf(id), pathOptions(id));

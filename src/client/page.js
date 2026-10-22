@@ -12,6 +12,7 @@ import { SkillEditor } from './editor.js';
 import { displayName, truncateMiddle } from './format.js';
 import { errorText } from './locales.js';
 import { ActionsMenu } from './menu.js';
+import { useNarrowViewport } from './viewport.js';
 
 const h = React.createElement;
 
@@ -21,39 +22,67 @@ function pathOf(skill) {
 }
 
 /**
- * One table row.
- * @param props - the skill, the translator, and the action callbacks.
+ * One list row.
+ *
+ * Three or four fixed-width members and one flexible one: the dot, the name
+ * block (which takes every pixel that is left), the path, and the actions
+ * button. Everything except the name is `flex: 0 0 auto`, so a long path or a
+ * wide menu can never squeeze the name out of the row; the name block is
+ * `flex: 1 1 auto` with `min-width: 0`, which is what lets its ellipsis work
+ * inside a flex container.
+ *
+ * In the compact layout the path cell is not rendered — the row would otherwise
+ * have to fit four members into a phone's width — and the full path moves into
+ * the row's accessible name.
+ * @param props - the skill, the translator, `compact`, and the action callbacks.
  * @returns the row.
  */
-function SkillRow({ t, skill, onEdit, onDownloadMd, onDownloadZip, onUpload }) {
+export function SkillRow({ t, skill, compact = false, onEdit, onDownloadMd, onDownloadZip, onUpload }) {
   const name = displayName(skill);
+  const statusLabel = skill.status === 'active' ? t('statusActive') : t('statusDisabled');
   return h(
-    'tr',
-    { 'data-skill': skill.dir },
+    'div',
+    {
+      className: 'dshsk-row',
+      role: 'row',
+      'data-skill': skill.dir,
+      'data-status': skill.status,
+      'data-layout': compact ? 'compact' : 'wide',
+      'aria-label': t('rowLabel', { name, status: statusLabel, path: skill.path }),
+    },
     h(
-      'td',
-      null,
-      h(
-        'span',
-        { className: 'dshsk-statusChip', 'data-status': skill.status },
-        h('span', { className: 'dshsk-statusDot', 'aria-hidden': 'true' }),
-        skill.status === 'active' ? t('statusActive') : t('statusDisabled'),
-      ),
+      'div',
+      { className: 'dshsk-statusCell', role: 'cell' },
+      h('span', {
+        className: 'dshsk-statusDot',
+        'data-status': skill.status,
+        role: 'img',
+        title: statusLabel,
+        'aria-label': statusLabel,
+      }),
     ),
     h(
-      'td',
-      null,
-      h('div', { className: 'dshsk-name' }, name),
-      skill.description ? h('div', { className: 'dshsk-nameMeta' }, skill.description) : null,
+      'div',
+      { className: 'dshsk-nameCell', role: 'cell' },
+      h('div', { className: 'dshsk-name', title: name }, name),
+      skill.description
+        ? h('div', { className: 'dshsk-nameMeta', title: skill.description }, skill.description)
+        : null,
     ),
+    compact
+      ? null
+      : h(
+          'div',
+          { className: 'dshsk-pathCell', role: 'cell' },
+          h(
+            'code',
+            { className: 'dshsk-path', title: skill.path, 'aria-label': skill.path },
+            truncateMiddle(skill.path, 15),
+          ),
+        ),
     h(
-      'td',
-      null,
-      h('code', { className: 'dshsk-path', title: skill.path }, truncateMiddle(skill.path, 44)),
-    ),
-    h(
-      'td',
-      null,
+      'div',
+      { className: 'dshsk-rowActions', role: 'cell' },
       h(ActionsMenu, {
         label: t('actionsFor', { name }),
         moreLabel: t('moreActions'),
@@ -68,6 +97,24 @@ function SkillRow({ t, skill, onEdit, onDownloadMd, onDownloadZip, onUpload }) {
   );
 }
 
+/** Column labels, dropped for the path column in the compact layout. */
+function ListHead({ t, compact }) {
+  return h(
+    'div',
+    { className: 'dshsk-listHead', role: 'row' },
+    h(
+      'div',
+      { className: 'dshsk-headCell dshsk-statusCell', role: 'columnheader' },
+      h('span', { className: 'dshsk-srOnly' }, t('columnStatus')),
+    ),
+    h('div', { className: 'dshsk-headCell dshsk-nameCell', role: 'columnheader' }, t('columnName')),
+    compact
+      ? null
+      : h('div', { className: 'dshsk-headCell dshsk-pathCell', role: 'columnheader' }, t('columnPath')),
+    h('div', { className: 'dshsk-headCell dshsk-rowActions', role: 'columnheader' }, t('columnActions')),
+  );
+}
+
 /**
  * @param props - `t` from the shell's locale seat and an optional stub client.
  * @returns the page.
@@ -76,6 +123,7 @@ export function SkillsPage({ t, client = api }) {
   const [list, setList] = React.useState({ phase: 'loading', skills: [], root: '', error: null });
   const [notice, setNotice] = React.useState(null);
   const [editor, setEditor] = React.useState(null);
+  const compact = useNarrowViewport();
   const input = React.useRef(null);
   const pendingUpload = React.useRef(null);
 
@@ -287,34 +335,20 @@ export function SkillsPage({ t, client = api }) {
         : null,
       list.phase === 'ready' && count > 0
         ? h(
-            'table',
-            { className: 'dshsk-table' },
-            h(
-              'thead',
-              null,
-              h(
-                'tr',
-                null,
-                h('th', { scope: 'col' }, t('columnStatus')),
-                h('th', { scope: 'col' }, t('columnName')),
-                h('th', { scope: 'col' }, t('columnPath')),
-                h('th', { scope: 'col' }, t('columnActions')),
-              ),
-            ),
-            h(
-              'tbody',
-              null,
-              list.skills.map((skill) =>
-                h(SkillRow, {
-                  key: skill.dir,
-                  t,
-                  skill,
-                  onEdit: openEditor,
-                  onDownloadMd: downloadMd,
-                  onDownloadZip: downloadZip,
-                  onUpload: pickFile,
-                }),
-              ),
+            'div',
+            { className: 'dshsk-list', role: 'table', 'aria-label': t('listLabel') },
+            h(ListHead, { t, compact }),
+            list.skills.map((skill) =>
+              h(SkillRow, {
+                key: skill.dir,
+                t,
+                skill,
+                compact,
+                onEdit: openEditor,
+                onDownloadMd: downloadMd,
+                onDownloadZip: downloadZip,
+                onUpload: pickFile,
+              }),
             ),
           )
         : null,

@@ -6,7 +6,7 @@ The page reads the skills directory itself instead of asking `ctx.skills`, becau
 
 ## What it does
 
-- **List** — one row per skill directory: status (`Active` for `SKILL.md`, `Disabled` for `_SKILL.md`), the frontmatter `name` (or the directory name) with the description underneath, and the path relative to the skills root, truncated in the middle when long.
+- **List** — one row per skill directory. The status is a single dot, green for `SKILL.md` and grey for `_SKILL.md`, with the word in its tooltip and accessible name; the frontmatter `name` (or the directory name) carries the description underneath and takes every pixel the row has left; the path relative to the skills root is capped at 15 characters, cut in the middle, with the full path in its tooltip. Below 640px the path column is not rendered at all (the row keeps the full path in its accessible name), so the row stays two lines tall and never scrolls sideways.
 - **Row menu** — `Download SKILL.md`, `Download ZIP`, `Upload`, `Edit SKILL.md`.
 - **Download SKILL.md** — the exact file bytes, `Content-Disposition: attachment`.
 - **Download ZIP** — the whole skill directory under its own name, attachments (`bin/`, `data/`, anything else) included, so the archive can be uploaded back as-is.

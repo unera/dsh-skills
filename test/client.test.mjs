@@ -12,7 +12,7 @@ import * as React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
 import { SkillEditor } from '../src/client/editor.js';
-import { SkillsPage } from '../src/client/page.js';
+import { SkillRow, SkillsPage } from '../src/client/page.js';
 import { renderMarkdown } from '../src/client/markdown.js';
 import { truncateMiddle } from '../src/client/format.js';
 import { translate } from './helpers.mjs';
@@ -128,43 +128,96 @@ function findByText(renderer, type, text) {
   return found;
 }
 
-test('the table renders status, name with description, path, and one menu per row', async () => {
-  const { client } = stubClient();
-  const renderer = await render(h(SkillsPage, { t: translate, client }));
+/**
+ * The list rows, excluding the header row.
+ * @param renderer - the renderer.
+ * @returns the row instances.
+ */
+function rowsOf(renderer) {
+  return renderer.root.findAll((node) => node.props.role === 'row' && typeof node.props['data-skill'] === 'string');
+}
 
-  const header = renderer.root.findAll((node) => node.type === 'th').map((node) => textOf(node));
-  assert.deepEqual(header, ['Status', 'Skill', 'Path', 'Actions']);
+/**
+ * Install a `window.matchMedia` stub for one test.
+ * @param narrow - whether `(max-width: 640px)` reports a match.
+ * @returns a disposer restoring the previous global.
+ */
+function stubViewport(narrow) {
+  const previous = globalThis.window;
+  globalThis.window = {
+    matchMedia: () => ({
+      matches: narrow,
+      addEventListener() {},
+      removeEventListener() {},
+    }),
+  };
+  return () => {
+    if (previous === undefined) delete globalThis.window;
+    else globalThis.window = previous;
+  };
+}
 
-  const rows = renderer.root.findAll((node) => node.type === 'tr').slice(1);
-  assert.equal(rows.length, 2);
+test('the list renders a status dot, the name, the path, and one menu per row', async () => {
+  const restore = stubViewport(false);
+  try {
+    const { client } = stubClient();
+    const renderer = await render(h(SkillsPage, { t: translate, client }));
 
-  const first = rows[0];
-  const text = textOf(first);
-  assert.match(text, /Active/);
-  assert.match(text, /alpha-skill/);
-  assert.match(text, /the first skill/);
-  assert.match(text, /alpha\/SKILL.md/);
+    const header = renderer.root
+      .findAll((node) => node.props.role === 'columnheader')
+      .map((node) => textOf(node));
+    assert.deepEqual(header, ['Status', 'Skill', 'Path', 'Actions']);
 
-  const second = rows[1];
-  assert.match(textOf(second), /Disabled/);
-  // No frontmatter name: the directory name is the display name.
-  assert.match(textOf(second), /a-very-long-directory-name/);
-  const path = second.findAll((node) => node.type === 'code')[0];
-  assert.match(textOf(path), /…/, 'a long path is truncated in the middle');
-  assert.equal(path.props.title, SKILLS[1].path, 'the tooltip keeps the full path');
+    const rows = rowsOf(renderer);
+    assert.equal(rows.length, 2);
 
-  // One ⋯ button per row.
-  const more = renderer.root.findAll(
-    (node) => node.type === 'button' && node.props['aria-haspopup'] === 'menu',
-  );
-  assert.equal(more.length, 2);
+    const first = rows[0];
+    const text = textOf(first);
+    assert.match(text, /alpha-skill/);
+    assert.match(text, /the first skill/);
+    assert.match(text, /alpha\/SKILL\.md/);
+    // The status word is gone from the row: the dot carries it.
+    assert.doesNotMatch(text, /\bActive\b/);
+    const dot = first.findAll((node) => node.props.className === 'dshsk-statusDot')[0];
+    assert.equal(dot.props['data-status'], 'active');
+    assert.equal(dot.props.title, 'Active');
+    assert.equal(dot.props['aria-label'], 'Active');
+
+    const second = rows[1];
+    // No frontmatter name: the directory name is the display name.
+    assert.match(textOf(second), /a-very-long-directory-name/);
+    const dot2 = second.findAll((node) => node.props.className === 'dshsk-statusDot')[0];
+    assert.equal(dot2.props.title, 'Disabled');
+    assert.equal(dot2.props['aria-label'], 'Disabled');
+    assert.equal(dot2.props['data-status'], 'disabled');
+
+    // The path is shortened to 15 characters, the full one lives in the tooltip.
+    const paths = renderer.root.findAll((node) => node.type === 'code');
+    assert.equal(paths.length, 2);
+    for (const path of paths) {
+      const shown = textOf(path);
+      assert.ok(shown.length <= 15, `"${shown}" must be at most 15 characters`);
+      if (path.props.title.length > 15) assert.match(shown, /…/, 'a long path is cut in the middle');
+    }
+    assert.equal(paths[0].props.title, SKILLS[0].path);
+    assert.equal(paths[0].props['aria-label'], SKILLS[0].path);
+    assert.equal(textOf(paths[0]), truncateMiddle(SKILLS[0].path, 15));
+
+    // One ⋯ button per row.
+    const more = renderer.root.findAll(
+      (node) => node.type === 'button' && node.props['aria-haspopup'] === 'menu',
+    );
+    assert.equal(more.length, 2);
+  } finally {
+    restore();
+  }
 });
 
 test('the empty state appears when no skill is installed', async () => {
   const { client } = stubClient({ list: async () => ({ root: '/home/x/.dsh/skills', skills: [] }) });
   const renderer = await render(h(SkillsPage, { t: translate, client }));
   assert.match(textOf(renderer.root), /No skills installed/);
-  assert.equal(renderer.root.findAll((node) => node.type === 'table').length, 0);
+  assert.equal(renderer.root.findAll((node) => node.props.role === 'table').length, 0);
 });
 
 test('the row menu opens, lists the four actions, and calls the right client method', async () => {
@@ -347,4 +400,86 @@ test('middle truncation keeps both ends and never exceeds the limit', () => {
   assert.ok(short.startsWith('some/very/lo'));
   assert.ok(short.endsWith('.md'));
   assert.equal(truncateMiddle('short/path/SKILL.md', 40), 'short/path/SKILL.md');
+});
+
+test('a compact row drops the path cell and keeps the full path in its accessible name', async () => {
+  const skill = SKILLS[1];
+  const renderer = await render(
+    h(SkillRow, {
+      t: translate,
+      skill,
+      compact: true,
+      onEdit: () => {},
+      onDownloadMd: () => {},
+      onDownloadZip: () => {},
+      onUpload: () => {},
+    }),
+  );
+
+  assert.equal(renderer.root.findAll((node) => node.props.className === 'dshsk-pathCell').length, 0);
+  assert.equal(renderer.root.findAll((node) => node.type === 'code').length, 0);
+
+  const name = renderer.root.findAll((node) => node.props.className === 'dshsk-name')[0];
+  assert.equal(textOf(name), skill.dir, 'the directory name is the fallback display name');
+  assert.ok(textOf(name).length > 0, 'the name must never collapse to nothing');
+
+  const row = renderer.root.findAll((node) => node.props.role === 'row')[0];
+  assert.equal(row.props['data-layout'], 'compact');
+  assert.match(row.props['aria-label'], /a-very-long-directory-name/);
+  assert.match(row.props['aria-label'], /Disabled/);
+  assert.ok(row.props['aria-label'].includes(skill.path), 'the row keeps the full path');
+
+  // The status dot and the actions menu survive the compact layout.
+  const dot = renderer.root.findAll((node) => node.props.className === 'dshsk-statusDot')[0];
+  assert.equal(dot.props['aria-label'], 'Disabled');
+  assert.equal(
+    renderer.root.findAll((node) => node.type === 'button' && node.props['aria-haspopup'] === 'menu').length,
+    1,
+  );
+});
+
+test('at 360 px the page renders no path column at all', async () => {
+  const restore = stubViewport(true);
+  try {
+    const { client } = stubClient();
+    const renderer = await render(h(SkillsPage, { t: translate, client }));
+
+    const header = renderer.root
+      .findAll((node) => node.props.role === 'columnheader')
+      .map((node) => textOf(node));
+    assert.deepEqual(header, ['Status', 'Skill', 'Actions'], 'the Path header goes with the column');
+
+    assert.equal(renderer.root.findAll((node) => node.props.className === 'dshsk-pathCell').length, 0);
+    assert.equal(renderer.root.findAll((node) => node.type === 'code').length, 0);
+
+    const rows = rowsOf(renderer);
+    assert.equal(rows.length, 2);
+    for (const row of rows) {
+      assert.equal(row.props['data-layout'], 'compact');
+      const name = row.findAll((node) => node.props.className === 'dshsk-name')[0];
+      assert.ok(textOf(name).trim().length > 0, 'the name keeps its full text in the DOM');
+    }
+    assert.equal(rows[0].props['aria-label'].includes(SKILLS[0].path), true);
+
+    // The actions menu is still there and still anchored to its own row.
+    assert.equal(
+      renderer.root.findAll((node) => node.type === 'button' && node.props['aria-haspopup'] === 'menu').length,
+      2,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('without a media-query provider the page stays in the wide layout', async () => {
+  const previous = globalThis.window;
+  delete globalThis.window;
+  try {
+    const { client } = stubClient();
+    const renderer = await render(h(SkillsPage, { t: translate, client }));
+    assert.equal(renderer.root.findAll((node) => node.props.className === 'dshsk-pathCell').length, 2);
+    assert.equal(rowsOf(renderer)[0].props['data-layout'], 'wide');
+  } finally {
+    if (previous !== undefined) globalThis.window = previous;
+  }
 });

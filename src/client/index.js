@@ -73,7 +73,16 @@ export function SkillsPanelIcon({ size = 16, active = false }) {
 export function apply(ctx) {
   ctx.effect(() => installStyles(), 'dsh-skills: styles');
   ctx.effect(() => ctx.locale.register(NS, 'en', en), 'dsh-skills: en dictionary');
-  ctx.effect(() => ctx.locale.addLanguage(RUSSIAN_LANGUAGE), 'dsh-skills: ru language');
+  // Another plugin may have registered `ru` first; the registry throws on a duplicate
+  // id, and that must not take this plugin down — its own dictionary still registers.
+  ctx.effect(() => {
+    try {
+      return ctx.locale.addLanguage(RUSSIAN_LANGUAGE);
+    } catch (error) {
+      if (!/already/i.test(String(error?.message ?? error))) throw error;
+      return () => {};
+    }
+  }, 'dsh-skills: ru language');
   ctx.effect(() => ctx.locale.register(NS, 'ru', ru), 'dsh-skills: ru dictionary');
 
   ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID, locale: NS }, SkillsPage));

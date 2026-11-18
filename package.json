@@ -1,6 +1,6 @@
 {
   "name": "@dr-co/dsh-skills",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Skills page for the DeepSeek Harness Web GUI: one sidebar panel listing every installed skill — your own, the ones bundled inside plugin packages, and plugin-provided ones with no file — with view, edit, rename, enable/disable, download (SKILL.md or the whole folder) and upload.",
   "license": "MIT",
   "type": "module",
